@@ -1,0 +1,27 @@
+{
+  "pregain": 0.0,
+  "filters": [
+    {
+      "filter_type": "PK",
+      "fc": 42.480928260242855,
+      "gain": -6.0,
+      "q": 1.0
+    },
+    {
+      "filter_type": "PK",
+      "fc": 174.48808070019382,
+      "gain": -6.0,
+      "q": 1.0000000000000002
+    },
+    {
+      "filter_type": "PK",
+      "fc": 4736.550573460203,
+      "gain": -4.9977745344472,
+      "q": 1.0
+    }
+  ],
+  "iem": "andromeda",
+  "target": "flat",
+  "constraint": "restricted",
+  "fs": 44100
+}

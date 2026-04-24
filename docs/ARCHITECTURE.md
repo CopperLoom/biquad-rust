@@ -9,7 +9,7 @@ optimizer in Rust. Zero Python required.
 
 | Source | Role | Local Path |
 |--------|------|------------|
-| [AutoEQ](https://github.com/jaakkopasanen/AutoEq) (Python) | **Correctness oracle.** All algorithmic decisions defer to AutoEQ's source. | `../biquad-fit/.venv/lib/python3.9/site-packages/autoeq/` |
+| [AutoEQ](https://github.com/jaakkopasanen/AutoEq) (Python) commit `7ae0f56` | **Correctness oracle.** All algorithmic decisions defer to AutoEQ's source. | `../reference-implementations/autoEQ/autoeq/` |
 | [biquad-fit](https://github.com/CopperLoom/biquad-fit) v2.1.0 (TypeScript) | **Prior port.** Faithful pipeline, L-BFGS optimizer (diverges from AutoEQ's SLSQP). | `../biquad-fit/src/` |
 | [relf/slsqp](https://github.com/relf/slsqp) v1.0.0 (Rust) | **Optimizer dependency.** Native Rust port of the same Fortran SLSQP that scipy wraps. | Cargo dependency |
 
@@ -21,6 +21,7 @@ optimizer in Rust. Zero Python required.
 | `autoeq/frequency_response.py` | `interpolate()`, `center()`, `compensate()`, `_smoothen()`, `equalize()`, `protection_mask()`, `limited_ltr_slope()`, `limited_rtl_slope()`, `find_rtl_start()` |
 | `autoeq/utils.py` | `generate_frequencies()`, `smoothing_window_size()`, `log_f_sigmoid()`, `log_log_gradient()` |
 | `autoeq/constants.py` | All default values (grid steps, Q ranges, gain ranges, etc.) |
+| `peq.yaml` (repo root) | Example PEQ config showing per-parameter locking in practice. See §6 note on shelf overlap. Local: `../reference-implementations/autoEQ/peq.yaml` |
 
 ### Key TypeScript Source Files
 
@@ -152,28 +153,46 @@ TypeScript: `interpolate.ts`.
 
 ### 2. Centering
 
-Subtract the dB value at 1 kHz from all points. Applied independently to both measured
-and target curves before error computation.
+Subtract the dB value at exactly 1 kHz from all points. Applied independently to both
+measured and target curves before error computation.
+
+**1 kHz is not on the 1.01 grid** (nearest grid points: ~995 Hz and ~1005 Hz). The dB
+value at 1 kHz must be obtained by log-linear interpolation between the two surrounding
+grid points — not by indexing the nearest sample. [Gotcha B]
 
 Reference: `frequency_response.py:center(frequency=1000)`.
 TypeScript: `optimize.ts:614-619`.
 
 ### 3. Compensation (Error)
 
-```
-error[i] = measured[i].db - target[i].db
-```
+`compensate()` is a **four-step pipeline**, not a raw subtraction: [Gotcha A]
 
-Both curves must be on the same grid (interpolated in step 1).
+1. **Interpolate target** onto the measurement grid using the same log-linear spline (k=1).
+   Extrapolates linearly beyond the input range — does not clamp to the boundary value. [Gotcha C]
+2. **Center target** at 1 kHz (log-linear interpolated, same as §2 — 1 kHz is off-grid). [Gotcha B]
+3. **Add `create_target()`** — applies optional tilt, bass boost, and treble boost shelves
+   to the centered target. For our golden file inputs (default params) this contributes zero.
+4. **Subtract**: `error[i] = measured[i].db - target[i].db`
 
-Reference: `frequency_response.py:compensate()` — specifically `self.error = self.raw - self.target`.
+Reference: `frequency_response.py:compensate()`, `center()`, `create_target()`.
 TypeScript: `compensate.ts`.
 
 ### 4. Smoothing — Savitzky-Golay, Two-Zone
 
 **Algorithm:** Savitzky-Golay filter, polynomial order 2. This is a convolution with
-precomputed least-squares polynomial coefficients. Edge handling: fit polynomial to edge
-window and evaluate (scipy `mode='interp'` equivalent).
+precomputed least-squares polynomial coefficients.
+
+**Edge handling — `mode='interp'` (critical):** scipy's `savgol_filter` default is
+`mode='interp'`, which fits a polynomial to the last `window_length` samples at each
+boundary and evaluates it — not mirror, reflect, or nearest. Most Rust savgol crates
+default to a different mode. Must use a crate that exposes `mode='interp'` or implement
+the edge polynomial fit manually. Incorrect edge mode changes values at the 20 Hz and
+20 kHz extremes — exactly where equalize makes slope-limit decisions. [Gotcha J]
+
+**Two independent passes then sigmoid blend:** `_smoothen()` runs savgol with the
+normal window over the entire curve, then savgol with the treble window over the entire
+curve, producing two full-length arrays. These are sigmoid-blended in the 6–8 kHz
+transition zone. It is **not** a single variable-window pass. [Gotcha D]
 
 **Two zones with sigmoid blend:**
 
@@ -199,16 +218,30 @@ Full slope-limiting pipeline on the negated smoothed error:
 
 1. Two-zone smooth the error -> `smoothed`
 2. Negate: `y = -smoothed` (correction curve)
-3. Find peaks in `y` with prominence >= 1 (positive and negative via `find_peaks(-y)`)
-4. If no peaks/dips: `equalization = y`, done
-5. Compute protection mask (zones around interior dips lower than neighbors -> limit-free)
-6. Find RTL start index
-7. Slope-limit LTR from index 0, max_slope = 18 dB/octave, with region validation
-   (clipped regions containing no peaks are discarded)
-8. Slope-limit RTL from rtl_start (flip, run LTR, flip back)
-9. Combine: `min(ltr, rtl)` element-wise
-10. Clip positive gain to 6.0 dB (no cap on cuts)
-11. Re-smooth with 1/5 octave (both zones use 1/5)
+3. Apply `treble_gain_k`: multiply treble region (above ~8 kHz) by `treble_gain_k` scalar
+   **before** clipping to `max_gain`. Reversing the order changes the treble ceiling.
+   For our golden files `treble_gain_k=1.0` (no effect), but order must still be correct.
+   [Gotcha E, `frequency_response.py:616-621`]
+4. Clip to `±max_gain` (default ±6 dB)
+5. Find peaks in `y` with prominence >= 1 (positive and negative via `find_peaks(-y)`)
+6. If no peaks/dips: `equalization = y`, done
+7. Compute protection mask (zones around interior dips lower than neighbors -> limit-free).
+   **Early return:** after inserting synthetic endpoint dips, if fewer than 3 total dips,
+   return a zero mask immediately (no protection). [Gotcha H]
+8. Find RTL start index. **No-dips fallback:** if no dips found, threshold =
+   `max(y[0], y[-1])`; RTL start = first index exceeding that threshold. [Gotcha G]
+9. Slope-limit LTR from index 0, max_slope = 18 dB/octave, with region validation
+   (clipped regions containing no peaks are discarded).
+   - Region bounds: `[region_start, i)` — exclusive upper bound. Protection mask is
+     checked at index `i`, not `i-1`. Off-by-one here silently drifts the whole LTR
+     correction. [Gotcha F]
+   - Slope baseline: `limited[-1]` (last already-clipped output value), not `y[i-1]`
+     (raw input). Clipping cascades: each clipped point becomes the baseline for the
+     next slope calculation. [Gotcha I, `frequency_response.py:738`]
+10. Slope-limit RTL from rtl_start (flip, run LTR, flip back)
+11. Combine: `min(ltr, rtl)` element-wise
+12. Clip positive gain to 6.0 dB (no cap on cuts)
+13. Re-smooth with 1/5 octave (both zones use 1/5)
 
 **Note:** `concha_interference` and `max_slope_decay` parameters exist in AutoEQ but
 default to `False` and `0.0` respectively. Our golden files do not use them. Omit from
@@ -263,8 +296,23 @@ Gain = weighted average using **signed** shelf FR as weights:
 **HighShelf init:** Find fc where `|mean(target[ix:])|` is maximized. Same Q and gain
 logic as LowShelf but using the high shelf response.
 
+**Shelf fc search clamp:** Both LSQ and HSQ init search over `[max(40, min_fc), min(10000, max_fc)]`
+regardless of user config — these are hardcoded outer bounds applied before the
+user's fc range. (`peq.py:334-335, 386-387`)
+
+**Shelf overlap prevention:** AutoEQ has no built-in algorithm to prevent LSQ and HSQ
+filters from overlapping. Instead, overlap is prevented through **per-parameter locking
+and constrained fc ranges in the config**. AutoEQ's own `peq.yaml` example demonstrates
+this pattern:
+- LSQ: `fc: 105` (fixed, not optimized), `q: 0.7` (fixed). Only gain is free.
+- HSQ: `min_fc: 5000, max_fc: 12000` (fc optimized but bounded). Q bounded [0.4, 0.7].
+
+The shelf filters can never overlap because the user constrains them via `FilterSpec`,
+not because the optimizer enforces separation. This is the primary real-world use case
+for per-parameter locking.
+
 Reference: `peq.py:Peaking.init()`, `LowShelf.init()`, `HighShelf.init()`,
-`_init_optimizer_params()`.
+`_init_optimizer_params()`. Example config: `peq.yaml` (AutoEQ repo root).
 TypeScript: `optimize.ts:initPeaking()`, `initLowShelf()`, `initHighShelf()`.
 
 ### 7. SLSQP Optimizer
@@ -304,9 +352,10 @@ User-supplied `fc_range`, `q_range`, `gain_range` override these defaults per fi
 MSE computed over optimizer grid (1.02 step), range **always** [20, 20000] Hz
 (hardcoded, independent of user's `freq_range`).
 
-Above 10 kHz: both target and filter response replaced with their respective averages
-before MSE computation. This means only total energy above 10 kHz matters, not
-point-to-point spectral accuracy.
+Above 10 kHz: `_10k_ix = argmin(|f - 10000|)`; slice `[_10k_ix:]` is **inclusive** of
+that index. Both target and filter response replaced with their respective averages over
+that slice before MSE computation. Only total energy above 10 kHz matters, not
+point-to-point spectral accuracy. (`peq.py:449,593`)
 
 **Sharpness penalty** (PK only):
 ```
@@ -317,10 +366,16 @@ penalty = mean((fr * coeff)^2)
 ```
 
 **Convergence** (callback after each SLSQP iteration):
-- Stop if `len(history) > 8 AND population_std(last_8) < 0.002`
-- Stop if `len(history) > 4 AND population_std(last_4) < 0.001`
+- Stop if `len(history) > 8 AND population_std(last_8) < min_std`
+- Stop if `len(history) > 4 AND population_std(last_4) < min_std / 2`
 - Stop at iteration 150 (SLSQP default)
 - Best-params restoration: track `best_loss` and `best_x` throughout, return best on stop
+
+`min_std` defaults to 0.002 (`DEFAULT_PEQ_OPTIMIZER_MIN_STD`) but is configurable via
+`Constraints.min_std`. Setting it to `None` disables convergence checking entirely,
+letting SLSQP run to its 150-iteration limit. AutoEQ's own `peq.yaml` example uses
+`min_std: null` for one-off custom optimizations where maximum accuracy is preferred
+over speed.
 
 Reference: `peq.py:PEQ.optimize()`, `_optimizer_loss()`, `_callback()`,
 `_init_optimizer_params()`, `_init_optimizer_bounds()`, `_parse_optimizer_params()`.
@@ -329,12 +384,12 @@ TypeScript: `optimize.ts:jointOptimize()`, `jointLoss()`, `converged()`.
 ### 8. Pregain
 
 ```
-max_boost = max(total_filter_response)
-if max_boost > 0: pregain = -(max_boost + 0.2)  // PREAMP_HEADROOM = 0.2
-else: pregain = 0
+max_boost = peq.max_gain  # = max(sum of all filter responses on optimizer grid)
+if max_boost > 0: pregain = -(max_boost + PREAMP_HEADROOM)  # PREAMP_HEADROOM = 0.2
+else: pregain = 0.0
 ```
 
-Clamped to the overall gain range.
+Not clamped. (`peq.py:543-545`, `frequency_response.py:211`)
 
 Reference: `peq.py:PEQ.max_gain`, used in `frequency_response.py:_optimize_peq_filters()`.
 TypeScript: `optimize.ts:computePregain()`.
@@ -376,7 +431,7 @@ TypeScript: `biquadResponse.ts`.
 | Max positive gain | 6.0 dB | `DEFAULT_MAX_GAIN` |
 | Preamp headroom | 0.2 dB | `PREAMP_HEADROOM` |
 | Max optimizer iterations | 150 | scipy fmin_slsqp default |
-| Convergence MIN_STD | 0.002 | `DEFAULT_PEQ_OPTIMIZER_MIN_STD` |
+| Convergence MIN_STD | 0.002 (default; configurable, None = disabled) | `DEFAULT_PEQ_OPTIMIZER_MIN_STD` |
 | Convergence window | 8 | `_callback` in peq.py |
 | PK default Q range | [0.18248, 6.0] | `DEFAULT_PEAKING_FILTER_MIN/MAX_Q` |
 | PK default fc range | [20, 10000] | `DEFAULT_PEAKING_FILTER_MIN/MAX_FC` |

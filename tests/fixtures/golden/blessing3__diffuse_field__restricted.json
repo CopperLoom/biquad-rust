@@ -1,0 +1,27 @@
+{
+  "pregain": -6.190472658173198,
+  "filters": [
+    {
+      "filter_type": "PK",
+      "fc": 9217.891813068687,
+      "gain": 5.595970289067843,
+      "q": 1.0
+    },
+    {
+      "filter_type": "PK",
+      "fc": 3434.761437247289,
+      "gain": 3.910291912642517,
+      "q": 1.0
+    },
+    {
+      "filter_type": "PK",
+      "fc": 5737.3148640243,
+      "gain": -2.774202756498626,
+      "q": 5.0
+    }
+  ],
+  "iem": "blessing3",
+  "target": "diffuse_field",
+  "constraint": "restricted",
+  "fs": 44100
+}
