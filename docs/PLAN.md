@@ -12,44 +12,111 @@ implementation. A phase is not done until its tests pass.
 
 ---
 
-### Phase 1: Project Scaffolding + Types
+### Phase 0: Prerequisites + Golden File Regeneration
 
-Set up the Rust project structure and define all shared types.
+Resolve ambiguities, pin references, and regenerate goldens **from AutoEQ directly** before
+any Rust code is written. Eliminates biquad-fit from the correctness chain entirely.
 
 **Tasks:**
-- `cargo init --lib` in project root
-- Add dependencies to `Cargo.toml`:
-  - `slsqp` — SLSQP optimizer
-  - `serde` + `serde_json` — serialization
-  - Dev: `approx` (float comparison), `criterion` (benchmarks)
+
+**0a. Pin AutoEQ version.**
+Record the exact commit hash of `reference-implementations/autoEQ/` in ARCHITECTURE.md's
+Reference Implementations table. This pins the oracle version for all goldens.
+
+**0b. Write `tests/generate_golden.py`** (Python, in this repo — replaces biquad-fit's version).
+~50 lines. Imports AutoEQ directly. For each of 90 combinations:
+1. Load IEM FR from `tests/fixtures/fr/{iem}.json`
+2. Load target from `tests/fixtures/targets/{target}.json`
+3. Run full AutoEQ pipeline (interpolate → center → compensate → equalize → optimize)
+4. Compute pregain as `pregain = -peq.max_gain` if `peq.max_gain > 0` else `0.0`
+   (pin exact formula from `peq.py:max_gain` + `PREAMP_HEADROOM` — resolve ambiguity
+   by reading `frequency_response.py:write_eqapo_parametric_eq` and `_optimize_peq_filters`)
+5. Write JSON with **Rust-native field names**: `filter_type`, `fc`, `gain`, `q`
+   (not AutoEQ's `type`, `freq`). No serde renames needed.
+
+**0c. Run the generator, commit regenerated goldens.**
+All 90 `tests/fixtures/golden/*.json` replaced. Verify count = 90.
+
+**0d. Resolve remaining ARCHITECTURE.md ambiguities.**
+- **10 kHz slice boundary**: `peq.py:449,593` — `_10k_ix = argmin(|f - 10000|)`,
+  slice `[_10k_ix:]` is inclusive of that index. Update ARCH §7.
+- **Pregain formula**: pinned by step 0b above. Update ARCH §8.
+- **Shelf fc search clamp**: `peq.py:334–335, 386–387` — init searches
+  `[max(40, min_fc), min(10000, max_fc)]` regardless of user config. Update ARCH §6.
+
+---
+
+### Phase 1: Project Scaffolding + Types ✓ COMPLETE
+
+Define all shared types. (Cargo init, fixtures, and bench stub are already done.)
+
+**Numeric convention:** f64 throughout — matches AutoEQ's numpy float64. No f32, no generics.
+
+**Tasks:**
+- Clean `Cargo.toml`: remove `ndarray`, `realfft`, `num-traits` (not needed; AutoEQ uses none of these).
+  Final deps: `slsqp`, `serde` + `serde_json`. Dev: `approx`, `criterion`.
 - Create `src/types.rs`:
   - `FilterType` enum: `PK`, `LSQ`, `HSQ` (with serde rename for JSON compat)
   - `FreqPoint { freq: f64, db: f64 }`
   - `Filter { filter_type: FilterType, fc: f64, gain: f64, q: f64 }`
-  - `FilterSpec`:
+    Golden files use the same field names (`filter_type`, `fc`) — no serde renames needed.
+    Generator (Phase 0) writes Rust-native names.
+  - `FilterSpec` — mirrors AutoEQ's per-filter fields exactly:
     ```rust
     pub struct FilterSpec {
-        pub filter_type: Option<FilterType>,  // defaults to PK
+        pub filter_type:   Option<FilterType>,  // defaults to PK
+        pub fc:            Option<f64>,    // initial value; None = auto-init from correction curve
+        pub q:             Option<f64>,    // initial value; None = auto-init
+        pub gain:          Option<f64>,    // initial value; None = auto-init
+        pub optimize_fc:   Option<bool>,   // None = true; false = lock fc at provided value
+        pub optimize_q:    Option<bool>,   // None = true; false = lock q
+        pub optimize_gain: Option<bool>,   // None = true; false = lock gain
+        pub fc_range:   Option<(f64, f64)>,  // defaults by type
+        pub q_range:    Option<(f64, f64)>,  // defaults by type
         pub gain_range: (f64, f64),           // required
-        pub q_range: Option<(f64, f64)>,      // defaults by type
-        pub fc_range: Option<(f64, f64)>,     // defaults by type
-        pub fc: Option<f64>,                  // Some = fixed, None = optimize
-        pub q: Option<f64>,                   // Some = fixed, None = optimize
-        pub gain: Option<f64>,                // Some = fixed, None = optimize
     }
     ```
-  - `Constraints { filter_specs: Vec<FilterSpec>, freq_range: Option<(f64, f64)>, fs: Option<f64> }`
+    Three states per param:
+    - `fc=None, optimize_fc=None/true` → auto-init from correction curve, free to optimize
+    - `fc=Some(x), optimize_fc=None/true` → seeded at x, free to optimize (matches AutoEQ)
+    - `fc=Some(x), optimize_fc=Some(false)` → locked at x (validation error if fc=None + optimize_fc=false)
+  - `MinStd` enum:
+    ```rust
+    pub enum MinStd {
+        Default,       // 0.002 — matches DEFAULT_PEQ_OPTIMIZER_MIN_STD
+        Disabled,      // run to 150 iterations (AutoEQ peq.yaml `min_std: null`)
+        Custom(f64),   // caller-specified threshold
+    }
+    ```
+  - `Constraints`:
+    ```rust
+    pub struct Constraints {
+        pub filter_specs: Vec<FilterSpec>,
+        pub freq_range: Option<(f64, f64)>,  // default [20, 10000]
+        pub fs: Option<f64>,                 // default 44100
+        pub min_std: Option<MinStd>,         // None = MinStd::Default
+    }
+    ```
   - `OptimizeResult { pregain: f64, filters: Vec<Filter> }`
   - `InterpolateOptions { step: Option<f64>, f_min: Option<f64>, f_max: Option<f64> }`
-- Create `src/lib.rs` with module declarations
-- Copy test fixtures into `tests/fixtures/{fr,targets,golden}/` (see setup.txt)
+  - `BiquadError` enum:
+    ```rust
+    pub enum BiquadError {
+        InvalidFilterSpec(String),      // e.g. fc=None + optimize_fc=false
+        InvalidFrequencyResponse(String), // NaN, < 2 points, etc.
+        OptimizerFailed(String),
+    }
+    ```
+  - `pub fn optimize(...) -> Result<OptimizeResult, BiquadError>` — no panics on public API
+    surface; internal invariants may still use `.expect()`
+- Replace `src/lib.rs` stub with module declarations
 - Create `tests/helpers/mod.rs` for golden file loading and RMSE computation
 
 **Tests:** Types compile, golden files parse correctly, RMSE helper produces known values.
 
 ---
 
-### Phase 2: Biquad Response + Interpolation
+### Phase 2: Biquad Response + Interpolation ✓ COMPLETE
 
 Two modules with no internal dependencies.
 
@@ -65,7 +132,7 @@ Two modules with no internal dependencies.
 **Tests:**
 - Biquad: PK/LSQ/HSQ at known params match expected dB. Cross-check against AutoEQ
   `PEQFilter.fr` for identical parameters.
-- Interpolate: grid point count matches TypeScript (461 for 1.01, ~350 for 1.02).
+- Interpolate: grid point count matches AutoEQ (695 for 1.01, 349 for 1.02).
   Values at original measurement points preserved within tolerance.
 
 ---
@@ -76,18 +143,34 @@ Two modules with no internal dependencies.
 - `src/smooth.rs`:
   - `savgol_coeffs(window_size, poly_order) -> Vec<f64>` — Vandermonde + Gauss-Jordan
   - `savgol_filter(data, window_size) -> Vec<f64>` — convolution + edge polynomial fit
+    **Edge mode `'interp'`:** fit a polynomial to the last `window_length` samples at each
+    boundary; do not use mirror/reflect/nearest. Verify chosen crate supports this or
+    implement manually. Affects 20 Hz and 20 kHz extremes. [Gotcha J]
   - `smoothing_window_size(freqs, octaves) -> usize`
   - `log_f_sigmoid(f, f_lower, f_upper) -> f64`
   - `two_zone_smooth(fr, normal_octaves, treble_octaves) -> Vec<FreqPoint>`
+    **Two full passes:** run savgol over the entire array with normal window → array A;
+    run savgol over the entire array with treble window → array B; sigmoid-blend A and B
+    in the 6–8 kHz zone. Not a single variable-window pass. [Gotcha D]
   - `smooth(fr, window_octaves) -> Vec<FreqPoint>` — public single-zone API
 - `src/compensate.rs`:
-  - `compensate(measured, target) -> Vec<FreqPoint>` — element-wise subtraction
+  - `compensate(measured, target) -> Vec<FreqPoint>` — **four-step pipeline** [Gotcha A]:
+    1. Interpolate target to measurement grid (k=1 linear spline, extrapolates beyond
+       input range — does not clamp) [Gotcha C]
+    2. Center target at 1 kHz via log-linear interpolation (1 kHz is off the 1.01 grid;
+       nearest points ~995/1005 Hz — interpolate, do not index nearest) [Gotcha B]
+    3. Add `create_target()` contributions (tilt, bass/treble shelves; default = zero)
+    4. Subtract: `error[i] = measured[i] - target[i]`
 
 **Tests:**
 - Savitzky-Golay: polynomial data (degree <= 2) passes through unchanged.
   Window size matches AutoEQ's `smoothing_window_size()` for 1.01 and 1.02 grids.
+  Edge values match scipy `mode='interp'` output on known fixture.
+- Two-zone smooth: verify that the blend at 7 kHz is between the normal-window and
+  treble-window outputs (not some other interpolant).
 - Sigmoid: verify weights at 5 kHz (~0), 7 kHz (~0.5), 10 kHz (~1).
-- Compensate: simple subtraction on matched grids.
+- Compensate: verify four-step pipeline against AutoEQ Python output on a fixture pair.
+  Specifically: off-grid 1 kHz centering and extrapolating interpolation.
 
 ---
 
@@ -97,20 +180,45 @@ The most complex single module. Full slope-limiting pipeline.
 
 **Tasks:**
 - `src/equalize.rs`:
-  - `find_peaks(arr, min_prominence) -> Vec<usize>` — local maxima with prominence
+  - `find_peaks(arr, prominence, width, height) -> (Vec<usize>, PeakProps)` —
+    **Two distinct call sites with different params; implement a single flexible function:**
+    - Equalize pipeline (ARCH §5): `prominence >= 1.0`, on raw `y` and `-y`
+    - Peaking filter init (Phase 5): `prominence=0, width=0, height=0`, on
+      `clip(target, 0, None)` and `clip(-target, 0, None)`
+    Port scipy's algorithm from `scipy/signal/_peak_finding.py` directly. Prominence
+    is non-trivial (recursive parent-peak search). `PeakProps` includes `widths`,
+    `peak_heights` (needed by peaking init's height×width scoring).
+  - `peak_widths(arr, peak_ixs) -> Vec<f64>` — interpolated widths at `rel_height=0.5`
+    (scipy default). Port from `scipy/signal/_peak_finding.py`. Needed by peaking init.
+    **Do not implement `band_penalty`** — it exists in AutoEQ's class hierarchy but is
+    never summed into the loss function (`_optimizer_loss` only adds `sharpness_penalty`).
   - `protection_mask(y, peak_inds, dip_inds) -> Vec<bool>`
+    **Early return:** after inserting synthetic endpoint dips, if total dip count < 3,
+    return zero mask immediately (no protected zones). [Gotcha H]
   - `find_rtl_start(y, peak_inds, dip_inds) -> usize`
+    **No-dips fallback:** when no dips exist, threshold = `max(y[0], y[-1])`; RTL start =
+    first index where `y[i] > threshold`. Not "start at 0" or "start at end". [Gotcha G]
   - `limited_ltr_slope(freqs, y, max_slope, start_index, peak_inds, limit_free_mask) -> Vec<f64>`
-    — with region validation
+    — with region validation.
+    **Region bounds:** `[region_start, i)` exclusive upper end; protection mask checked at
+    index `i`, not `i-1`. [Gotcha F]
+    **Slope baseline:** use `limited[-1]` (last already-clipped output) as the prior value
+    for slope calculation, not `y[i-1]` (raw input). Clipping cascades through the array.
+    [Gotcha I, `frequency_response.py:738`]
   - `limited_rtl_slope(...)` — flip, run LTR, flip back
-  - `equalize(error) -> Vec<FreqPoint>` — full pipeline
+  - `equalize(error) -> Vec<FreqPoint>` — full pipeline.
+    **`treble_gain_k` ordering:** multiply treble region by `treble_gain_k` **before**
+    clipping to `max_gain` (not after). For our goldens `treble_gain_k=1.0`, but order
+    must be correct for API completeness. [Gotcha E, `frequency_response.py:616-621`]
 
 **Tests:**
 - Flat error -> equalization is the negation.
 - Known step error -> slope capped at 18 dB/oct.
-- Peak finding: compare against scipy `find_peaks` output on fixture data.
-- Full equalize: compare output against TypeScript for each test fixture (should match
-  exactly — same algorithm).
+- Peak finding: compare against AutoEQ Python (`scipy.signal.find_peaks`) output on fixture data.
+- protection_mask: <3 dips after synthetic insertion → zero mask. [Gotcha H]
+- find_rtl_start: no-dips input → threshold = max(y[0], y[-1]). [Gotcha G]
+- limited_ltr_slope: verify slope uses clipped prior, not raw prior. [Gotcha I]
+- Full equalize: compare output against AutoEQ Python for each test fixture.
 
 ---
 
@@ -140,24 +248,71 @@ encoding, and per-parameter locking.
   - `optimize(measured, target, constraints) -> OptimizeResult`
     — full pipeline entry point
 
-**SLSQP integration notes:**
-- Check `relf/slsqp` crate API — may provide own finite-difference gradient, or may
-  require explicit gradient function. If explicit: forward differences with h = sqrt(f64::EPSILON).
-- Convergence via callback matching AutoEQ's `_callback` logic.
-- Max iterations: 150.
+**SLSQP API spike (do first in this phase):** Read `relf/slsqp` crate docs/source to confirm
+whether it provides finite-difference gradients internally or requires an explicit gradient
+function. If explicit: use forward differences with h = sqrt(f64::EPSILON). Also confirm the
+callback/termination mechanism — AutoEQ exits via Python exception (`OptimizationFinished`);
+Rust needs a different signal (return value, mutable flag, or crate-native API). Document
+both findings before proceeding.
+
+**Init priority sort — explicit task:** Implement the 12-entry priority table from
+ARCHITECTURE.md §6 (`_init_optimizer_params` ordering). Filters must be sorted by priority
+before initialization. This is easy to miss and breaks correctness if skipped — read
+ARCHITECTURE.md §6 fully before writing `resolve_specs`.
+
+**Parameter vector ordering:** Free params enter the SLSQP `x` vector per-filter grouped:
+`[f0.fc, f0.q, f0.gain, f1.fc, f1.q, f1.gain, ...]`, skipping locked params within each
+filter. `encode_params` and `decode_params` must use this same order. Matches AutoEQ's
+`_parse_optimizer_params` (peq.py:567–583).
+
+**`init_peaking` — call site details (peq.py:179–182):**
+- Calls `find_peaks` with `prominence=0, width=0, height=0` on `clip(target, 0, None)`
+  (positive peaks) and `clip(-target, 0, None)` (negative peaks/dips) separately.
+- Uses `peak_props['widths']` (from `peak_widths` at rel_height=0.5) and `peak_heights`
+  for height × width scoring. Fc range filtered to `[min_fc_ix, max_fc_ix]`.
+- No-peaks fallback: fc = midpoint of fc range, Q = sqrt(2), gain = 0.0.
+
+**Shelf init details (peq.py:317–401):**
+- fc search clamped to `[max(40, min_fc), min(10000, max_fc)]` — hardcoded outer bounds.
+- Q init: `clip(0.7, min_q, max_q)` — clamps into user-specified q_range.
+- Gain: `dot(target, shelf_fr) / sum(shelf_fr)` with `self.gain = 1` seed before computing.
+
+**Convergence callback — population std:** `np.std(history[-n:])` is population std (ddof=0).
+Implement as `sqrt(mean((x_i - mean(x))^2))` — 2-line manual impl, no stdlib equivalent.
+Best-params restoration on exit: accumulate `(params, loss)` every callback iteration;
+restore `params[argmin(loss)]` after early termination (peq.py:719).
+
+**Sharpness penalty — numerical stability (peq.py:262–266):**
+Sigmoid `1 / (1 + exp(-100 * x))` overflows for moderate x. Clamp exponent to [-500, 500]
+before `exp`, or use stable form: `if x >= 0 { 1/(1+exp(-100x)) } else { exp(100x)/(1+exp(100x)) }`.
+**Shelf filters return `sharpness_penalty = 0.0` always** — only Peaking has a non-zero penalty.
+**`band_penalty` is dead code — do not implement** (defined on filters but never added to loss).
+
+**Max iterations:** 150.
 
 **Per-parameter locking implementation:**
-1. `FilterSpec { fc: Some(8000.0), .. }` -> `optimize_fc = false`, fc fixed at 8000
-2. `encode_params` skips fixed params -> shorter optimization vector
-3. `build_bounds` skips fixed params -> matching shorter bounds vector
-4. `joint_loss` includes all filters in cascade (fixed and free)
-5. `decode_params` splices fixed values back into full filter list
-6. Init sequence: fixed-param filters still initialized (or use provided values)
-   and subtracted from remaining target before initializing free-param filters
+1. `FilterSpec { fc: Some(8000.0), optimize_fc: Some(false), .. }` -> fc locked at 8000
+2. `FilterSpec { fc: Some(2500.0), optimize_fc: None, .. }` -> seeded at 2500, optimizer is free
+3. `encode_params` skips locked params -> shorter optimization vector
+4. `build_bounds` skips locked params -> matching shorter bounds vector
+5. `joint_loss` includes all filters in cascade (locked and free)
+6. `decode_params` splices locked values back into full filter list
+7. Init sequence: locked-param filters use provided values (not re-initialized),
+   and their response is subtracted from remaining target before initializing free filters
+
+**Real-world pattern (from AutoEQ's `peq.yaml`):** Shelf overlap is prevented by
+locking shelf fc values or constraining their ranges, not by any optimizer logic:
+- LSQ: `fc: Some(105.0), optimize_fc: Some(false), q: Some(0.7), optimize_q: Some(false)` — gain-only
+- HSQ: `fc_range: Some((5000.0, 12000.0))` — fc seeded + free but bounded away from LSQ
+
+**Configurable convergence (`MinStd` enum):**
+- `None` / `Some(MinStd::Default)` -> 0.002 (matches `DEFAULT_PEQ_OPTIMIZER_MIN_STD`)
+- `Some(MinStd::Disabled)` -> run to 150 iterations (AutoEQ's `min_std: null`)
+- `Some(MinStd::Custom(v))` -> caller-specified threshold
 
 **Tests:**
 - Loss: known filter set + target -> verify MSE matches hand calculation.
-- Init: compare params against TypeScript output for fixtures.
+- Init: compare params against AutoEQ Python output for fixtures.
 - Encoding round-trip: encode -> decode is identity.
 - Locking: locked params unchanged after optimization.
 
@@ -184,10 +339,16 @@ The critical validation phase. Every combination must pass.
 
 **Tasks:**
 - `tests/integration/golden.rs` (or `tests/golden.rs`):
-  - Load each of 90 golden files
-  - Run `optimize()` with same inputs
-  - Compare output via RMSE
-  - Assert RMSE <= 0.5 dB per combination
+  - Load each of 90 golden files (format: `{ iem, target, constraint, fs, pregain, filters }`,
+    where filters use Rust-native field names: `filter_type`, `fc`, `gain`, `q`)
+  - Run `optimize()` with same inputs → our `OptimizeResult`
+  - **RMSE comparison method:**
+    The measured FR cancels out algebraically (corrected = measured + filters + pregain;
+    difference = (filters_g + pre_g) − (filters_o + pre_o)). No need to load the IEM FR.
+    1. Compute golden filter cascade response + pregain on the optimizer grid (1.02 step, 20–20000 Hz)
+    2. Compute our filter cascade response + pregain on the same grid
+    3. RMSE of the difference, assert ≤ 0.5 dB
+  - This compares equivalent corrected response curves, not raw params (params may differ while producing equivalent output)
 
 **Test matrix:** 5 IEMs x 6 targets x 3 constraint sets = 90
 
@@ -214,6 +375,9 @@ The critical validation phase. Every combination must pass.
 - Lock only gain on a PK filter
   - Assert: gain unchanged, fc and Q optimized
 - All bands fully locked -> output equals input (no optimization occurs)
+- **peq.yaml pattern:** LSQ with `fc=Some(105), optimize_fc=false, q=Some(0.7), optimize_q=false`
+  (gain-only), HSQ with `fc_range=(5000, 12000)` — verify shelves don't overlap and result is reasonable
+- `min_std: Some(MinStd::Disabled)` — verify optimizer runs to 150 iterations, not early-stopped
 
 ---
 
@@ -261,8 +425,16 @@ Total: ~185-210 tests.
 | Decision | Rationale |
 |----------|-----------|
 | SLSQP via `relf/slsqp` | Same algorithm as AutoEQ. Eliminates L-BFGS divergence and pathological shelf inversions. |
-| Per-parameter locking | Matches AutoEQ's `optimize_fc`/`optimize_q`/`optimize_gain`. Required for fixed-band EQ and eq-coach locked-band feature. |
+| `FilterSpec` mirrors AutoEQ fields exactly | `fc/q/gain` = initial value, `optimize_fc/q/gain` = lock flag. Supports auto-init, seeded-free, and locked — all three states AutoEQ exposes. |
+| f64 throughout | Matches AutoEQ's numpy float64. No f32, no generics. Precision matters in biquad phi-identity and SLSQP finite differences. |
+| `MinStd` enum (not `Option<Option<f64>>`) | Three states (Default / Disabled / Custom) made self-documenting. Eliminates nested-Option footgun. |
 | Signed shelf gain weighting | Matches AutoEQ (`dot(target, fr) / sum(fr)`). TypeScript used `abs(fr)` — a minor bug. |
+| Configurable `min_std` | AutoEQ's own configs override this (e.g. `peq.yaml` sets `min_std: null`). Must be exposed, not hardcoded. |
+| No `ndarray` / `realfft` / `num-traits` | AutoEQ uses none of these. Plain `Vec<f64>` is sufficient and keeps the dependency surface minimal. |
+| Goldens regenerated from AutoEQ directly | Eliminates biquad-fit from correctness chain. Our `tests/generate_golden.py` imports AutoEQ, controls field names, and pins the oracle version. |
+| Golden field names are Rust-native | Generator emits `filter_type`/`fc` matching our `Filter` struct — no serde renames on the hot path. |
+| `compensate()` is a four-step pipeline | Interpolate target → center at 1 kHz (log-linear, off-grid) → add `create_target()` → subtract. Not a raw `measured - target`. [Gotcha A] |
+| savgol edge mode = `'interp'` | scipy default fits a polynomial to the last `window_length` samples at each boundary. Most Rust savgol crates default to mirror/nearest/reflect — must verify or implement manually. Affects 20 Hz / 20 kHz extremes. [Gotcha J] |
 | Separate repo | Clean start. No mixed-language build. TypeScript version remains for browser/npm. |
 | serde for I/O | Standard Rust JSON. Also needed for eventual Tauri `compute_eq` command. |
 

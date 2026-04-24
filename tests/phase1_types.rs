@@ -66,8 +66,7 @@ fn rmse_helper_known_values() {
 #[test]
 fn optimizer_grid_bounds() {
     let grid = helpers::optimizer_grid();
-    assert!(*grid.first().unwrap() >= 20.0);
-    assert!(*grid.last().unwrap() <= 20000.0 * 1.02); // last step may slightly exceed
-    // ~230 points expected for 1.02 step over 20–20000
-    assert!(grid.len() > 200 && grid.len() < 400);
+    assert_eq!(*grid.first().unwrap(), 20.0);
+    assert!(*grid.last().unwrap() <= 20000.0);
+    assert_eq!(grid.len(), 349);
 }

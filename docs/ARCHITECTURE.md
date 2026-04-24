@@ -145,8 +145,8 @@ space). Binary search for surrounding pair, then lerp.
 
 | Grid | Step | Range | Points |
 |------|------|-------|--------|
-| Pipeline | 1.01 | 20-20,000 Hz | ~461 |
-| Optimizer | 1.02 | 20-20,000 Hz | ~350 |
+| Pipeline | 1.01 | 20-20,000 Hz | 695 |
+| Optimizer | 1.02 | 20-20,000 Hz | 349 |
 
 Reference: `frequency_response.py:interpolate()` with `pol_order=1` (linear).
 TypeScript: `interpolate.ts`.
