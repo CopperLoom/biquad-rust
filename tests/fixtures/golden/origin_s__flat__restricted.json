@@ -1,0 +1,27 @@
+{
+  "pregain": 0.0,
+  "filters": [
+    {
+      "filter_type": "PK",
+      "fc": 4481.949599243191,
+      "gain": -6.0,
+      "q": 1.1548851218604388
+    },
+    {
+      "filter_type": "PK",
+      "fc": 59.9419260001986,
+      "gain": -6.0,
+      "q": 1.0
+    },
+    {
+      "filter_type": "PK",
+      "fc": 2554.1273483630457,
+      "gain": -5.734431777412959,
+      "q": 1.0
+    }
+  ],
+  "iem": "origin_s",
+  "target": "flat",
+  "constraint": "restricted",
+  "fs": 44100
+}

@@ -1,0 +1,27 @@
+{
+  "pregain": -4.150509790436295,
+  "filters": [
+    {
+      "filter_type": "PK",
+      "fc": 3407.377032138576,
+      "gain": -6.0,
+      "q": 1.0000000000000002
+    },
+    {
+      "filter_type": "PK",
+      "fc": 128.77756524008808,
+      "gain": 3.618279487752536,
+      "q": 1.0
+    },
+    {
+      "filter_type": "PK",
+      "fc": 315.0024094055377,
+      "gain": 1.706821291008567,
+      "q": 1.0
+    }
+  ],
+  "iem": "blessing3",
+  "target": "bass_heavy",
+  "constraint": "restricted",
+  "fs": 44100
+}
