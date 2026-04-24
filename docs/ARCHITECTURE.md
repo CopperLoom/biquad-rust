@@ -251,6 +251,372 @@ Reference: `frequency_response.py:equalize()`, `protection_mask()`, `find_rtl_st
 `limited_ltr_slope()`, `limited_rtl_slope()`.
 TypeScript: `equalize.ts`.
 
+#### Phase 4 Source Reference
+
+Verbatim excerpts from AutoEQ and scipy to anchor the Rust port. All AutoEQ
+line numbers refer to `reference-implementations/autoEQ/autoeq/frequency_response.py`
+and were verified 2026-04-24.
+
+##### `find_peaks` call sites
+
+Both call sites live inside `equalize()` immediately after the two-zone smooth
+and negation:
+
+```
+577:        peak_inds, peak_props = find_peaks(y, prominence=1)
+578:        dip_inds, dip_props = find_peaks(-y, prominence=1)
+```
+
+Signature: `scipy.signal.find_peaks(x, prominence=1)` — positional `x` is the
+negated smoothed error `y = -fr.smoothed`; `prominence=1` is a scalar minimum
+(dB) with no upper bound. `peak_props` is not consumed; only `peak_inds` and
+`dip_inds` flow onward. No `width`, `height`, `distance`, `threshold`, `wlen`,
+or `rel_height` are passed — all defaults. `peak_widths` is **not** called
+anywhere in the equalize pipeline (it is only used by peaking-filter
+initialization in Phase 5's `PEQ.init` path, which lives in `peq.py`).
+
+The single `scipy.signal` import is at line 10:
+
+```
+10:from scipy.signal import savgol_filter, find_peaks, minimum_phase, firwin2
+```
+
+##### AutoEQ `equalize()` — lines 542–634
+
+Signature and smoothing+negation preamble (lines 542–578):
+
+```
+542:    def equalize(
+543:            self, max_gain=DEFAULT_MAX_GAIN, max_slope=DEFAULT_MAX_SLOPE, max_slope_decay=0.0,
+544:            concha_interference=False, window_size=1 / 12, treble_window_size=2, treble_f_lower=DEFAULT_TREBLE_F_LOWER,
+545:            treble_f_upper=DEFAULT_TREBLE_F_UPPER, treble_gain_k=DEFAULT_TREBLE_GAIN_K):
+...
+566:        fr = FrequencyResponse(name='fr', frequency=self.frequency, raw=self.error)
+567:        # Smoothen data heavily in the treble region to avoid problems caused by peakiness
+568:        fr.smoothen(
+569:            window_size=window_size, treble_window_size=treble_window_size, treble_f_lower=treble_f_lower,
+570:            treble_f_upper=treble_f_upper)
+571:
+572:        # Copy data
+573:        x = np.array(fr.frequency)
+574:        y = np.array(-fr.smoothed)  # Inverse of the smoothed error
+575:
+576:        # Find peaks and notches
+577:        peak_inds, peak_props = find_peaks(y, prominence=1)
+578:        dip_inds, dip_props = find_peaks(-y, prominence=1)
+```
+
+Flat-line early return (lines 580–589):
+
+```
+580:        if not len(peak_inds) and not len(dip_inds):
+581:            # No peaks or dips, it's a flat line
+582:            # Use the inverse error as the equalization target
+583:            self.equalization = y
+584:            # Equalized
+585:            self.equalized_raw = self.raw + self.equalization
+586:            if len(self.smoothed):
+587:                self.equalized_smoothed = self.smoothed + self.equalization
+588:            return y, fr.smoothed.copy(), np.array([]), np.array([False] * len(y)), np.array([]), \
+589:                np.array([False] * len(y)), np.array([]), np.array([]), len(y) - 1, np.array([False] * len(y))
+```
+
+Main branch — protection mask, RTL start, LTR/RTL slope limit, combine, treble
+weighting, clip, re-smooth (lines 591–631):
+
+```
+591:        else:
+592:            limit_free_mask = self.protection_mask(y, peak_inds, dip_inds)
+593:            if concha_interference:
+594:                # 8 kHz - 11.5 kHz should not be limit free zone
+595:                limit_free_mask[np.logical_and(x >= 8000, x <= 11500)] = False
+596:
+597:            # Find rtl start index
+598:            rtl_start = self.find_rtl_start(y, peak_inds, dip_inds)
+599:
+600:            # Find ltr and rtl limitations
+601:            # limited_ltr is y but with slopes limited when traversing left to right
+602:            # clipped_ltr is boolean mask for limited samples when traversing left to right
+603:            # limited_rtl is found using ltr algorithm but with flipped data
+604:            limited_ltr, clipped_ltr, regions_ltr = self.limited_ltr_slope(
+605:                x, y, max_slope, max_slope_decay=max_slope_decay, start_index=0, peak_inds=peak_inds,
+606:                limit_free_mask=limit_free_mask, concha_interference=concha_interference)
+607:            limited_rtl, clipped_rtl, regions_rtl = self.limited_rtl_slope(
+608:                x, y, max_slope, max_slope_decay=max_slope_decay, start_index=rtl_start, peak_inds=peak_inds,
+609:                limit_free_mask=limit_free_mask, concha_interference=concha_interference)
+610:
+611:            # ltr and rtl limited curves are combined with min function
+612:            combined = self.__class__(
+613:                name='limiter', frequency=x, raw=np.min(np.vstack([limited_ltr, limited_rtl]), axis=0))
+614:
+615:            # Limit treble gain
+616:            gain_k = log_f_sigmoid(self.frequency, treble_f_lower, treble_f_upper, a_normal=1.0, a_treble=treble_gain_k)
+617:            combined.raw *= gain_k
+618:
+619:            # Gain can be reduced in the treble region
+620:            # Clip positive gain to max gain
+621:            combined.raw = np.min(np.vstack([combined.raw, np.ones(combined.raw.shape) * max_gain]), axis=0)
+622:            # Smoothen the curve to get rid of hard kinks
+623:            combined.smoothen(window_size=1 / 5, treble_window_size=1 / 5)
+624:
+625:            # Equalization curve
+626:            self.equalization = combined.smoothed
+627:
+628:        # Equalized
+629:        self.equalized_raw = self.raw + self.equalization
+630:        if len(self.smoothed):
+631:            self.equalized_smoothed = self.smoothed + self.equalization
+```
+
+##### AutoEQ `protection_mask()` — lines 636–669
+
+```
+636:    @staticmethod
+637:    def protection_mask(y, peak_inds, dip_inds):
+...
+648:        if len(peak_inds) and (not len(dip_inds) or peak_inds[-1] > dip_inds[-1]):
+649:            # Last peak is after last dip, add new dip after the last peak at the minimum
+650:            last_dip_ind = np.argmin(y[peak_inds[-1]:]) + peak_inds[-1]
+651:            dip_inds = np.concatenate([dip_inds, [last_dip_ind]])
+652:            dip_levels = y[dip_inds]
+653:        else:
+654:            dip_inds = np.concatenate([dip_inds, [-1]])
+655:            dip_levels = y[dip_inds]
+656:            dip_levels[-1] = np.min(y)
+657:
+658:        mask = np.zeros(len(y)).astype(bool)
+659:        if len(dip_inds) < 3:
+660:            return mask
+661:
+662:        for i in range(1, len(dip_inds) - 1):
+663:            dip_ind = dip_inds[i]
+664:            target_left = dip_levels[i - 1]
+665:            target_right = dip_levels[i + 1]
+666:            left_ind = np.argwhere(y[:dip_ind] >= target_left)[-1, 0] + 1
+667:            right_ind = np.argwhere(y[dip_ind:] >= target_right)[0, 0] + dip_ind - 1
+668:            mask[left_ind:right_ind + 1] = np.ones(right_ind - left_ind + 1).astype(bool)
+669:        return mask
+```
+
+Note the asymmetric endpoint synthesis: when the last peak is after the last
+dip, a real minimum is inserted; otherwise a sentinel index `-1` is appended
+and its level is overwritten with `np.min(y)` (so the level is the global
+minimum, not `y[-1]`). The loop writes `mask[left_ind : right_ind + 1]` —
+inclusive on the right.
+
+##### AutoEQ `limited_ltr_slope()` — lines 704–776
+
+```
+704:    @classmethod
+705:    def limited_ltr_slope(cls, x, y, max_slope, max_slope_decay=0.0, start_index=0, peak_inds=None, limit_free_mask=None,
+706:                          concha_interference=False):
+...
+724:        if peak_inds is not None:
+725:            peak_inds = np.array(peak_inds)
+726:
+727:        limited = []
+728:        clipped = []
+729:        regions = []
+730:        for i in range(len(x)):
+731:            if i <= start_index:
+732:                # No clipping before start index
+733:                limited.append(y[i])
+734:                clipped.append(False)
+735:                continue
+736:
+737:            # Calculate slope and local limit
+738:            slope = log_log_gradient(x[i], x[i - 1], y[i], limited[-1])
+739:            # Local limit is 25% of the limit between 8 kHz and 10 kHz
+740:            local_limit = max_slope / 4 if 8000 <= x[i] <= 11500 and concha_interference else max_slope
+741:
+742:            if clipped[-1]:
+743:                # Previous sample clipped, reduce limit
+744:                local_limit *= (1 - max_slope_decay) ** np.log2(x[i] / x[regions[-1][0]])
+745:
+746:            if slope > local_limit and (limit_free_mask is None or not limit_free_mask[i]):
+747:                # Slope between the two samples is greater than the local maximum slope, clip to the max
+748:                if not clipped[-1]:
+749:                    # Start of clipped region
+750:                    regions.append([i])
+751:                clipped.append(True)
+752:                # Add value with limited change
+753:                octaves = np.log(x[i] / x[i - 1]) / np.log(2)
+754:                limited.append(limited[-1] + local_limit * octaves)
+755:
+756:            else:
+757:                # Moderate slope, no need to limit
+758:                limited.append(y[i])
+759:
+760:                if clipped[-1]:
+761:                    # Previous sample clipped but this one didn't, means it's the end of clipped region
+762:                    # Add end index to the region
+763:                    regions[-1].append(i + 1)
+764:
+765:                    region_start = regions[-1][0]
+766:                    if peak_inds is not None and not np.any(np.logical_and(peak_inds >= region_start, peak_inds < i)):
+767:                        # None of the peak indices found in the current region, discard limitations
+768:                        limited[region_start:i] = y[region_start:i]
+769:                        clipped[region_start:i] = [False] * (i - region_start)
+770:                        regions.pop()
+771:                clipped.append(False)
+772:
+773:        if len(regions) and len(regions[-1]) == 1:
+774:            regions[-1].append(len(x) - 1)
+775:
+776:        return np.array(limited), np.array(clipped), np.array(regions)
+```
+
+Key quirks surfaced by the source:
+- `slope = log_log_gradient(x[i], x[i-1], y[i], limited[-1])` — the baseline
+  is the previously *limited* output, not raw `y[i-1]` (line 738).
+- `limit_free_mask[i]` is checked, not `[i-1]` (line 746).
+- Region record has the form `[start]` at open, then `[start, i + 1]` at close
+  (line 763) — the stored end is `i + 1`, i.e. one past the first unclipped
+  sample. Region validation uses `peak_inds >= region_start AND peak_inds < i`
+  (line 766) — not `i + 1` and not `region_end`; this is a third distinct
+  index.
+- On region discard, rewrite span is `[region_start : i]` (lines 768–769),
+  exclusive at `i`.
+- Trailing open region gets closed with `len(x) - 1` (line 774), **not**
+  `len(x)`.
+
+##### AutoEQ `limited_rtl_slope()` — lines 671–702
+
+```
+671:    @classmethod
+672:    def limited_rtl_slope(cls, x, y, max_slope, max_slope_decay=0.0, start_index=0, peak_inds=None, limit_free_mask=None,
+673:                          concha_interference=False):
+...
+690:        """
+691:        start_index = len(x) - start_index - 1
+692:        if peak_inds is not None:
+693:            peak_inds = len(x) - peak_inds - 1
+694:        if limit_free_mask is not None:
+695:            limit_free_mask = np.flip(limit_free_mask)
+696:        limited_rtl, clipped_rtl, regions_rtl = cls.limited_ltr_slope(
+697:            x, np.flip(y), max_slope, max_slope_decay=max_slope_decay, start_index=start_index, peak_inds=peak_inds,
+698:            limit_free_mask=limit_free_mask, concha_interference=concha_interference)
+699:        limited_rtl = np.flip(limited_rtl)
+700:        clipped_rtl = np.flip(clipped_rtl)
+701:        regions_rtl = len(x) - regions_rtl - 1
+702:        return limited_rtl, clipped_rtl, regions_rtl
+```
+
+Note: `x` is **not** flipped on line 697 — only `y`, `peak_inds`,
+`limit_free_mask`, and `start_index` are reversed. The frequency axis is still
+increasing inside the inner LTR call. This works because LTR only consults
+`x[i] / x[i-1]` ratios as octaves; reflecting them would just flip the sign
+and cancel. The Rust port must mirror this asymmetry (flip the data, keep the
+frequency vector as-is).
+
+##### AutoEQ `find_rtl_start()` — lines 778–806
+
+```
+778:    @staticmethod
+779:    def find_rtl_start(y, peak_inds, dip_inds):
+...
+790:        # Find starting index for the rtl pass
+791:        if len(peak_inds) and (not len(dip_inds) or peak_inds[-1] > dip_inds[-1]):
+792:            # Last peak is a positive peak
+793:            if len(dip_inds):
+794:                # Find index on the right side of the peak where the curve crosses the last dip level
+795:                rtl_start = np.argwhere(y[peak_inds[-1]:] <= y[dip_inds[-1]])
+796:            else:
+797:                # There are no dips, use the minimum of the first and the last value of y
+798:                rtl_start = np.argwhere(y[peak_inds[-1]:] <= max(y[0], y[-1]))
+799:            if len(rtl_start):
+800:                rtl_start = rtl_start[0, 0] + peak_inds[-1]
+801:            else:
+802:                rtl_start = len(y) - 1
+803:        else:
+804:            # Last peak is a negative peak, start there
+805:            rtl_start = dip_inds[-1]
+806:        return rtl_start
+```
+
+Three branches: (a) trailing positive peak with dips present → first post-peak
+index where `y <= last_dip_level`; (b) trailing positive peak with no dips →
+first post-peak index where `y <= max(y[0], y[-1])` (**`<=`**, not `>`); (c)
+otherwise `dip_inds[-1]`. The `<=` comparator on line 795/798 contradicts
+earlier internal notes that suggested `>`; the source is authoritative.
+Fallback when no crossing is found is `len(y) - 1` (line 802).
+
+##### scipy `peak_prominences()` — algorithm spec
+
+scipy `_peak_finding.py:323-467` is the Python wrapper; the numerical kernel
+(`_peak_prominences`) lives in the compiled `_peak_finding_utils` Cython
+module (`.so` only in this install — no Python-level source shipped). The
+wrapper's docstring is the normative spec:
+
+> Strategy to compute a peak's prominence:
+>
+> 1. Extend a horizontal line from the current peak to the left and right
+>    until the line either reaches the window border (see `wlen`) or
+>    intersects the signal again at the slope of a higher peak. An
+>    intersection with a peak of the same height is ignored.
+> 2. On each side find the minimal signal value within the interval defined
+>    above. These points are the peak's bases.
+> 3. The higher one of the two bases marks the peak's lowest contour line.
+>    The prominence can then be calculated as the vertical difference between
+>    the peak's height itself and its lowest contour line.
+
+Entry point forwards straight to the compiled kernel:
+
+```
+_peak_finding.py:460:    x = _arg_x_as_expected(x)
+_peak_finding.py:461:    peaks = _arg_peaks_as_expected(peaks)
+_peak_finding.py:462:    wlen = _arg_wlen_as_expected(wlen)
+_peak_finding.py:463:    return _peak_prominences(x, peaks, wlen)
+```
+
+Return tuple: `(prominences, left_bases, right_bases)` — bases are *signal
+indices*, not window-relative. Equal-height neighbours do **not** terminate
+the horizontal scan (per the docstring example at indices `[0,1,0,3,1,3,0,4,0]`
+with peak at index 5, the left base is 2, not 4). For AutoEQ's call sites
+`wlen=None` so the scan extends to the signal boundary.
+
+##### scipy `peak_widths()` — algorithm spec
+
+Python wrapper at `_peak_finding.py:467-590`; kernel is compiled. Normative
+spec from the wrapper docstring:
+
+> * Calculate the evaluation height `h_eval = h_peak − P · R`, where `h_peak`
+>   is the height of the peak itself, `P` is the peak's prominence and `R` a
+>   positive ratio specified with `rel_height`.
+> * Draw a horizontal line at the evaluation height to both sides, starting at
+>   the peak's current vertical position until the lines either intersect a
+>   slope, the signal border or cross the vertical position of the peak's
+>   base (see `peak_prominences` for a definition). For the first case,
+>   intersection with the signal, the true intersection point is estimated
+>   with linear interpolation.
+> * Calculate the width as the horizontal distance between the chosen
+>   endpoints on both sides. As a consequence of this the maximal possible
+>   width for each peak is the horizontal distance between its bases.
+
+Entry point:
+
+```
+_peak_finding.py:585:    x = _arg_x_as_expected(x)
+_peak_finding.py:586:    peaks = _arg_peaks_as_expected(peaks)
+_peak_finding.py:587:    if prominence_data is None:
+_peak_finding.py:588:        # Calculate prominence if not supplied and use wlen if supplied.
+_peak_finding.py:589:        wlen = _arg_wlen_as_expected(wlen)
+_peak_finding.py:590:        prominence_data = _peak_prominences(x, peaks, wlen)
+_peak_finding.py:591:    return _peak_widths(x, peaks, rel_height, *prominence_data)
+```
+
+Return tuple: `(widths, width_heights, left_ips, right_ips)` — `left_ips` and
+`right_ips` are *fractional* sample indices (linearly interpolated on the
+slope between the two samples straddling the evaluation height). `widths` is
+simply `right_ips − left_ips` in sample units. `rel_height` default is `0.5`
+(half-prominence contour); AutoEQ's equalize pipeline never calls
+`peak_widths` directly, but Phase 5 peaking-filter init does at the default.
+
+Note: because the kernel is Cython-only in this install, the Rust port should
+treat the docstring-level spec plus scipy's published behaviour as the
+oracle, and validate against scipy outputs on real fixture data (as planned
+in Phase 4 tests).
+
 ### 6. Filter Initialization
 
 Filters initialized sequentially against the **remaining target** (equalization curve

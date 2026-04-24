@@ -174,7 +174,7 @@ Two modules with no internal dependencies.
 
 ---
 
-### Phase 4: Equalize
+### Phase 4: Equalize ✓ COMPLETE
 
 The most complex single module. Full slope-limiting pipeline.
 
@@ -219,6 +219,117 @@ The most complex single module. Full slope-limiting pipeline.
 - find_rtl_start: no-dips input → threshold = max(y[0], y[-1]). [Gotcha G]
 - limited_ltr_slope: verify slope uses clipped prior, not raw prior. [Gotcha I]
 - Full equalize: compare output against AutoEQ Python for each test fixture.
+
+#### Research Notes
+
+Line numbers below verified against
+`reference-implementations/autoEQ/autoeq/frequency_response.py` on 2026-04-24.
+See `docs/ARCHITECTURE.md` §"Phase 4 Source Reference" for verbatim source.
+
+**Key algorithmic decisions extracted from source:**
+
+- `find_peaks` is called twice only, both inside `equalize()` at lines 577-578
+  with the exact signature `find_peaks(y, prominence=1)` / `find_peaks(-y, prominence=1)`.
+  No `width`, `height`, `distance`, `threshold`, `wlen`, `plateau_size`, or
+  `rel_height` are ever passed from the equalize pipeline — all defaults.
+  `peak_props` is discarded; only the index arrays flow forward.
+- `peak_widths` is **not** called in the equalize pipeline. It is only used
+  by peaking-filter initialization (Phase 5, in `peq.py`). Do not waste Phase
+  4 implementation budget on `peak_widths` unless also tackling Phase 5 inits.
+- `prominence=1` means minimum=1.0 dB, no upper bound (scipy's `_unpack_condition_args`
+  interprets a scalar as `(imin, None)`).
+- The smoothing applied inside `equalize()` (lines 568-570) uses `window_size=1/12`,
+  `treble_window_size=2` by default — the same two-zone shape as Phase 3, but
+  applied to the **error** (`self.error`) inside a throwaway `FrequencyResponse`.
+- After min-combining LTR/RTL (line 613), the treble weighting `gain_k`
+  (log-f sigmoid between `treble_f_lower` and `treble_f_upper`) multiplies
+  the combined curve (line 617) **before** clipping to `max_gain` (line 621),
+  **before** a final 1/5-oct re-smooth (line 623).
+- Final re-smooth at line 623 uses `window_size=1/5, treble_window_size=1/5`
+  — same window for both zones. This flattens hard kinks from the clipper;
+  do not skip it.
+- `log_log_gradient` on line 738 uses `limited[-1]`, not `y[i-1]` — clipping
+  cascades. This is Gotcha I.
+- Clipped-region accounting uses at least **three distinct indices** that
+  must not be conflated:
+  - `region_start` — the index where clipping began (line 750).
+  - `i` — the first unclipped sample after the region (line 763 stores
+    `i + 1` as the "end" marker).
+  - `region_end = i + 1` as stored in `regions` — one past the first
+    unclipped sample.
+  - The peak-intersection validation on line 766 uses `peak_inds >= region_start`
+    **AND** `peak_inds < i` (not `< i + 1`, not `< region_end`).
+  - The revert span on lines 768-769 is `[region_start : i]` (exclusive at `i`).
+  - The trailing-open-region close on line 774 appends `len(x) - 1`, not `len(x)`.
+- `limited_rtl_slope` (lines 691-701) flips `y`, `peak_inds`, `limit_free_mask`
+  and transforms `start_index` → `len(x) - start_index - 1`, but **does not
+  flip `x`**. The inner LTR call receives a monotonically increasing frequency
+  axis paired with a reversed amplitude array. Octave ratios come out
+  sign-swapped but are only used as magnitudes, so it works. Port this
+  asymmetry faithfully.
+- `protection_mask` endpoint synthesis (lines 648-656) is asymmetric:
+  - Last-peak-after-last-dip: append `argmin(y[last_peak:]) + last_peak`,
+    then read its level from `y`.
+  - Otherwise: append literal index `-1`, then **overwrite** that level with
+    `np.min(y)` — the sentinel index is never dereferenced for its value.
+    A naive port that appends `y[-1]` as the level diverges when `y[-1]` is
+    not the minimum.
+- `protection_mask` `< 3` early return is at lines 659-660, **after** the
+  synthetic insertion — count the synthesized array, not the input. Gotcha H.
+- `protection_mask` mask-write (line 668) is `mask[left_ind : right_ind + 1]`,
+  right-inclusive. The `right_ind` computation on line 667 subtracts 1
+  (`+ dip_ind - 1`), so the net stored span is `[left_ind, right_ind + 1)` in
+  Python-slice terms — verify this exactly when porting; an off-by-one here
+  leaks a protected sample in or out.
+- `find_rtl_start` uses `<=` for the threshold crossing, not `<` or `>`
+  (lines 795 and 798). The no-dips fallback threshold is `max(y[0], y[-1])`
+  (line 798) — Gotcha G. Fallback when nothing crosses: `len(y) - 1`
+  (line 802), not 0 and not `len(y)`.
+
+**Gotcha line-number references (verified against source):**
+
+- Gotcha E (`treble_gain_k` before clip): lines 616-621 — matches existing
+  architecture note.
+- Gotcha F (region bounds `[region_start, i)`, mask check at `i`): lines
+  746, 750, 763, 766, 768.
+- Gotcha G (RTL no-dips fallback): line 798.
+- Gotcha H (`protection_mask` `< 3` early return): lines 659-660.
+- Gotcha I (slope baseline is `limited[-1]`): line 738 — matches existing
+  architecture note.
+
+**Edge cases / surprises not already documented:**
+
+- `np.argwhere(...)[-1, 0] + 1` (line 666) and `np.argwhere(...)[0, 0] + dip_ind - 1`
+  (line 667) both call `argwhere` unguarded. If either returns an empty array
+  (monotone signal where no sample is `>= target`), Python raises `IndexError`.
+  AutoEQ relies on the structural invariant that adjacent dip levels exist on
+  both sides of an interior dip. The Rust port should either replicate
+  (panic on malformed input) or guard and fall back — decide explicitly.
+- `protection_mask`'s sentinel `-1` index is *never* used to look up a `y`
+  value (line 656 overwrites that slot before use). A Rust port using `usize`
+  cannot store `-1`; carry a separate sentinel flag or model dip_levels as
+  `Vec<f64>` directly without round-tripping through indices.
+- `regions_ltr` / `regions_rtl` are returned but never consumed by `equalize`.
+  Only `limited_*` and `clipped_*` (and, implicitly, the in-function region
+  validation) matter. The Rust port can skip materializing regions beyond
+  what the LTR loop needs internally.
+- scipy's `_peak_prominences` and `_peak_widths` live in
+  `scipy/signal/_peak_finding_utils` — shipped as a compiled `.so` in this
+  install (no `.pyx` source on disk). The normative spec is the wrapper
+  docstrings in `_peak_finding.py` at lines 323-466 and 467-590. Validate
+  the Rust port against scipy runtime output on fixture data, not against
+  a reference Python source.
+- scipy's prominence scan ignores **equal-height** neighbouring peaks (the
+  horizontal line must hit a *higher* peak to terminate). A naive `>=`
+  termination deviates from scipy on plateaus and multi-peak ridges.
+- scipy's width output `left_ips` / `right_ips` are *fractional* sample
+  indices from linear interpolation on the straddling slope. Returning
+  integer indices drops ~0.5 sample of width precision per side and will
+  break any downstream Q-from-width scoring.
+- The concha-interference path (lines 593-595, 740) and `max_slope_decay`
+  path (line 744) are live code but unused by our golden fixtures. Omitting
+  them from the Rust port is consistent with the existing plan; just document
+  that skipping them makes the equalize surface a strict subset of AutoEQ's.
 
 ---
 

@@ -50,6 +50,16 @@ fn log_linear_at(freqs: &[f64], dbs: &[f64], query: f64) -> f64 {
     }
 }
 
+/// Subtract the log-linearly interpolated dB value at 1 kHz from all points.
+/// Matches AutoEQ's `FrequencyResponse.center(frequency=1000)`.
+/// 1 kHz is off the 1.01 grid, so it must be interpolated, not indexed.
+pub fn center(fr: &[FreqPoint]) -> Vec<FreqPoint> {
+    let freqs: Vec<f64> = fr.iter().map(|p| p.freq).collect();
+    let dbs: Vec<f64> = fr.iter().map(|p| p.db).collect();
+    let offset = log_linear_at(&freqs, &dbs, 1000.0);
+    fr.iter().map(|p| FreqPoint { freq: p.freq, db: p.db - offset }).collect()
+}
+
 /// Compute error curve: error = measured − target.
 ///
 /// Four-step pipeline matching AutoEQ's `compensate()`:

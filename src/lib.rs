@@ -11,3 +11,4 @@ pub use types::{
     FilterType, FreqPoint, Filter, FilterSpec, Constraints, OptimizeResult,
     InterpolateOptions, BiquadError, MinStd,
 };
+pub use compensate::center;
