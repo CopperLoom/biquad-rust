@@ -514,18 +514,14 @@ calls for PK filters (~42% improvement on 10-band).
 
 ---
 
-### Phase 9: Documentation + CI
+### Phase 9: Documentation + CI ✓ COMPLETE
 
-**Tasks:**
-- Rustdoc on all public types and functions
-- `README.md` with:
-  - Installation (Cargo dependency)
-  - Quick start example
-  - API reference summary
-  - Algorithm & accuracy section (SLSQP parity with AutoEQ)
-  - Per-parameter locking examples
-- `CLAUDE.md` for Claude Code sessions
-- `.github/workflows/ci.yml`: `cargo test`, `cargo clippy`, `cargo fmt --check`
+**Delivered:**
+- Rustdoc on all public types and functions; crate-level `//!` doc with working quick-start example
+- `README.md`: installation, quick start, full API table, per-parameter locking examples, algorithm summary, 87/90 accuracy note, performance numbers
+- `.github/workflows/ci.yml`: `cargo test --all-features`, `cargo clippy -- -D warnings`, `cargo fmt --check` (3 jobs, triggers on push/PR to main)
+- All clippy warnings resolved; `cargo fmt` applied across all source files
+- Note: CI triggers once a GitHub remote is declared and the branch is pushed
 
 ---
 
