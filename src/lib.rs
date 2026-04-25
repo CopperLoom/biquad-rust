@@ -12,4 +12,10 @@ pub use types::{
     FilterType, FreqPoint, Filter, FilterSpec, Constraints, OptimizeResult,
     InterpolateOptions, BiquadError, MinStd,
 };
-pub use compensate::center;
+pub use interpolate::interpolate;
+pub use compensate::{compensate, center};
+pub use smooth::{smooth, two_zone_smooth};
+pub use equalize::equalize;
+pub use biquad_response::biquad_response;
+pub use optimize::optimize;
+pub use apply_filters::apply_filters;
