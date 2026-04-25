@@ -33,7 +33,12 @@ fn golden_files_parse() {
 fn all_90_golden_files_parse() {
     let iems = ["blessing3", "hexa", "andromeda", "zero2", "origin_s"];
     let targets = [
-        "harman_ie_2019", "diffuse_field", "flat", "v_shaped", "bass_heavy", "bright",
+        "harman_ie_2019",
+        "diffuse_field",
+        "flat",
+        "v_shaped",
+        "bass_heavy",
+        "bright",
     ];
     let constraints = ["standard", "restricted", "qudelix_10"];
     let mut count = 0;

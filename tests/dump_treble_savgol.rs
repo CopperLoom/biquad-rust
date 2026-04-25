@@ -24,7 +24,11 @@ fn dump_treble_savgol() {
         let measured = load_fr(iem);
         let target = load_target(target_name);
 
-        let opts = InterpolateOptions { step: Some(1.01), f_min: None, f_max: None };
+        let opts = InterpolateOptions {
+            step: Some(1.01),
+            f_min: None,
+            f_max: None,
+        };
         let interp = interpolate(&measured, &opts);
         let interp_c = center(&interp);
         let error = compensate(&interp_c, &target);
@@ -56,9 +60,7 @@ fn dump_treble_savgol() {
                 .map(|(f, d)| format!("  {{\"freq\": {f:.6}, \"db\": {d:.6}}}"))
                 .collect();
             let json = format!("[\n{}\n]", pts.join(",\n"));
-            let path = format!(
-                "{debug_dir}/{iem}__{target_name}__{suffix}_rust.json"
-            );
+            let path = format!("{debug_dir}/{iem}__{target_name}__{suffix}_rust.json");
             fs::write(&path, &json).expect("write");
             println!("  wrote {path}");
         }
