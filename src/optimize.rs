@@ -186,6 +186,29 @@ fn mean_slice(s: &[f64]) -> f64 {
     s.iter().sum::<f64>() / s.len() as f64
 }
 
+fn sharpness_coeff(filter: &Filter) -> Option<f64> {
+    if filter.filter_type != FilterType::PK {
+        return None;
+    }
+    if filter.q.abs() < 1e-12 {
+        return None;
+    }
+    let gain_limit = -0.09503189270199464 + 20.575128011847003 / filter.q;
+    if gain_limit.abs() < 1e-12 {
+        return None;
+    }
+    let x = filter.gain / gain_limit - 1.0;
+    let z = -100.0 * x;
+    let coeff = if z >= 0.0 {
+        let e = z.min(500.0).exp();
+        1.0 / (1.0 + e)
+    } else {
+        let e = (-z).min(500.0).exp();
+        e / (1.0 + e)
+    };
+    Some(coeff)
+}
+
 fn joint_loss(
     filters: &[Filter],
     freqs: &[f64],
@@ -195,9 +218,23 @@ fn joint_loss(
     max_f_ix: usize,
     ten_k_ix: usize,
 ) -> f64 {
-    let mut target = correction.to_vec();
-    let mut fr = total_response(filters, freqs, fs);
+    let n = freqs.len();
+    let mut fr = vec![0.0f64; n];
+    let mut penalty = 0.0f64;
 
+    // Single pass: accumulate total response and sharpness penalties together,
+    // reusing each filter's biquad_response for both computations.
+    for f in filters {
+        let filter_fr = biquad_response(f.filter_type, f.fc, f.gain, f.q, freqs, fs);
+        if let Some(coeff) = sharpness_coeff(f) {
+            penalty += filter_fr.iter().map(|&v| (v * coeff).powi(2)).sum::<f64>() / n as f64;
+        }
+        for (o, v) in fr.iter_mut().zip(filter_fr) {
+            *o += v;
+        }
+    }
+
+    let mut target = correction.to_vec();
     // Flatten above 10 kHz (inclusive)  [ten_k_ix:]
     let mt = mean_slice(&target[ten_k_ix..]);
     let mf_val = mean_slice(&fr[ten_k_ix..]);
@@ -215,7 +252,6 @@ fn joint_loss(
         .sum::<f64>()
         / (max_f_ix - min_f_ix) as f64;
 
-    let penalty: f64 = filters.iter().map(|f| sharpness_penalty(f, freqs, fs)).sum();
     (mse + penalty).sqrt()
 }
 
@@ -989,7 +1025,7 @@ mod tests {
         let xf = loss_max_f_ix(&freqs);
         let tk = ten_k_ix(&freqs);
         let result = joint_optimize(
-            &initial, &specs, &freqs, &correction, 44100.0, mf, xf, tk, Some(0.002),
+            &initial, &specs, &freqs, &correction, 44100.0, mf, xf, tk, Some(0.002), None,
         )
         .unwrap();
         assert_abs_diff_eq!(result[0].fc, locked_fc, epsilon = 1e-9);

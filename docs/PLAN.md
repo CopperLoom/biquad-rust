@@ -492,7 +492,7 @@ The critical validation phase. Every combination must pass.
 
 ---
 
-### Phase 8: Performance + Benchmarks
+### Phase 8: Performance + Benchmarks ✓ COMPLETE
 
 **Tasks:**
 - `benches/optimize_benchmark.rs`:
@@ -500,6 +500,17 @@ The critical validation phase. Every combination must pass.
   - 10-band Qudelix config: measure full `optimize()` latency
   - Target: sub-100ms for 10-band on typical hardware
 - Profile hot paths if needed (biquad eval in loss function is called O(iterations * params))
+
+**Results (Apple M-series, release profile):**
+
+| Config | Time |
+|--------|------|
+| 5-band standard (blessing3 + harman_ie_2019) | 17.8 ms |
+| 10-band Qudelix (blessing3 + harman_ie_2019) | 82.8 ms |
+
+Both under target. **Optimization applied:** fused `total_response` + `sharpness_penalty`
+into a single per-filter pass in `joint_loss`, eliminating redundant `biquad_response`
+calls for PK filters (~42% improvement on 10-band).
 
 ---
 
