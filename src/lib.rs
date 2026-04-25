@@ -2,6 +2,7 @@ pub mod types;
 pub mod interpolate;
 pub mod compensate;
 pub mod smooth;
+pub mod peak_finding;
 pub mod equalize;
 pub mod biquad_response;
 pub mod optimize;

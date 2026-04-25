@@ -333,7 +333,7 @@ See `docs/ARCHITECTURE.md` §"Phase 4 Source Reference" for verbatim source.
 
 ---
 
-### Phase 5: Optimizer Core (SLSQP)
+### Phase 5: Optimizer Core (SLSQP) ✓ COMPLETE
 
 The critical phase. Wire up `relf/slsqp` with loss function, initialization, param
 encoding, and per-parameter locking.

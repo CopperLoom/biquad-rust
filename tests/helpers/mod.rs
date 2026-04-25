@@ -61,4 +61,14 @@ pub fn rmse(a: &[f64], b: &[f64]) -> f64 {
     mse.sqrt()
 }
 
+pub fn load_phase4_expected(iem: &str, target: &str) -> Vec<FreqPoint> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/phase4_equalize")
+        .join(format!("{iem}__{target}.json"));
+    let json = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Missing phase4 fixture {iem}__{target}: {e}\nRun: python3 tests/generate_phase4_expected.py"));
+    serde_json::from_str(&json)
+        .unwrap_or_else(|e| panic!("Failed to parse phase4 fixture {iem}__{target}: {e}"))
+}
+
 // cascade_response and assert_rmse_le are added in Phase 2 when biquad_response is implemented.

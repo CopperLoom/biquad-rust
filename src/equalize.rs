@@ -1,3 +1,4 @@
+use crate::peak_finding::find_peaks;
 use crate::smooth::{log_f_sigmoid, two_zone_smooth};
 use crate::types::FreqPoint;
 
@@ -8,79 +9,6 @@ const TREBLE_F_UPPER: f64 = 8000.0;
 
 fn log_log_gradient(x1: f64, x0: f64, y1: f64, y0: f64) -> f64 {
     (y1 - y0) / (x1 / x0).log2()
-}
-
-fn local_maxima(y: &[f64]) -> Vec<usize> {
-    let n = y.len();
-    if n < 3 {
-        return vec![];
-    }
-    let mut peaks = vec![];
-    let mut i = 1usize;
-    while i < n - 1 {
-        if y[i] > y[i - 1] {
-            // Walk plateau to find end
-            let mut j = i + 1;
-            while j < n && y[j] == y[i] {
-                j += 1;
-            }
-            if j == n || y[j] < y[i] {
-                peaks.push(i); // left edge of plateau or sharp peak
-                i = j;
-                continue;
-            }
-        }
-        i += 1;
-    }
-    peaks
-}
-
-fn prominence(y: &[f64], peak: usize) -> f64 {
-    let h = y[peak];
-
-    // Scan left: continue while y[i] <= h (equal-height does NOT terminate)
-    let mut left_min = h;
-    if peak > 0 {
-        let mut i = peak - 1;
-        loop {
-            if y[i] > h {
-                break;
-            }
-            if y[i] < left_min {
-                left_min = y[i];
-            }
-            if i == 0 {
-                break;
-            }
-            i -= 1;
-        }
-    }
-
-    // Scan right: continue while y[i] <= h
-    let mut right_min = h;
-    for i in (peak + 1)..y.len() {
-        if y[i] > h {
-            break;
-        }
-        if y[i] < right_min {
-            right_min = y[i];
-        }
-    }
-
-    h - left_min.max(right_min)
-}
-
-/// Port of scipy.signal.find_peaks with prominence filter.
-/// Returns indices of local maxima with prominence >= min_prominence.
-pub fn find_peaks(y: &[f64], min_prominence: f64) -> Vec<usize> {
-    let candidates = local_maxima(y);
-    if min_prominence <= 0.0 {
-        return candidates;
-    }
-    candidates
-        .into_iter()
-        .filter(|&p| prominence(y, p) >= min_prominence)
-        .collect()
 }
 
 /// Zones around interior dips lower than neighbors → limit-free.
@@ -124,7 +52,9 @@ pub fn protection_mask(y: &[f64], peak_inds: &[usize], dip_inds: &[usize]) -> Ve
         let target_left = dip_levels[i - 1];
         let target_right = dip_levels[i + 1];
 
-        // Last idx in y[..dip_ind] where y >= target_left, then +1
+        // Last idx in y[..dip_ind] where y >= target_left, then +1.
+        // The structural invariant (adjacent dip levels bound the dip from above) guarantees
+        // a match exists on well-formed FR data; panic loudly rather than silently using 0.
         let left_ind = y[..dip_ind]
             .iter()
             .enumerate()
@@ -132,15 +62,15 @@ pub fn protection_mask(y: &[f64], peak_inds: &[usize], dip_inds: &[usize]) -> Ve
             .map(|(j, _)| j)
             .last()
             .map(|j| j + 1)
-            .unwrap_or(0);
+            .expect("protection_mask invariant: y[..dip_ind] must contain a sample >= left dip level");
 
-        // First idx in y[dip_ind..] where y >= target_right, offset by dip_ind - 1
+        // First idx in y[dip_ind..] where y >= target_right, offset by dip_ind - 1.
         let right_ind = y[dip_ind..]
             .iter()
             .enumerate()
             .find(|&(_, v)| *v >= target_right)
             .map(|(j, _)| j + dip_ind.saturating_sub(1))
-            .unwrap_or(0);
+            .expect("protection_mask invariant: y[dip_ind..] must contain a sample >= right dip level");
 
         for j in left_ind..=right_ind {
             if j < n {
@@ -379,6 +309,23 @@ mod tests {
         let result = limited_ltr_slope(&x, &y, 18.0, 0, &[1], &[false; 4]);
         assert!(result[1] < 1.0, "index 1 should be slope-limited");
         assert!(result[2] < 2.0, "index 2 should also be slope-limited (cascade)");
+    }
+
+    #[test]
+    fn test_limited_ltr_slope_cap_18_dboct() {
+        // Sharp positive step: 0 dB for first half, +20 dB for second half.
+        // Every adjacent pair in the output must satisfy slope <= 18 dB/oct.
+        let n = 100usize;
+        let x: Vec<f64> = (0..n).map(|i| 20.0 * 1.01f64.powi(i as i32)).collect();
+        let y: Vec<f64> = (0..n).map(|i| if i < n / 2 { 0.0 } else { 20.0 }).collect();
+        let result = limited_ltr_slope(&x, &y, 18.0, 0, &[], &vec![false; n]);
+        for i in 1..n {
+            let slope = log_log_gradient(x[i], x[i - 1], result[i], result[i - 1]);
+            assert!(
+                slope <= 18.0 + 1e-9,
+                "slope at i={i}: {slope:.4} dB/oct exceeds 18 dB/oct cap"
+            );
+        }
     }
 
     #[test]
