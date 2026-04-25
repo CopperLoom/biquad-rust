@@ -23,6 +23,9 @@ CASES = [
     ('origin_s', 'bright'),
     ('origin_s', 'flat'),
     ('zero2',    'bass_heavy'),
+    # New failing cases after interpolate-extrapolation fix:
+    ('hexa',     'diffuse_field'),
+    ('origin_s', 'bass_heavy'),
 ]
 
 def load_json_fr(name, subdir):

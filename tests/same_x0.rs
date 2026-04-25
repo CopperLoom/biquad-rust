@@ -27,6 +27,23 @@ fn qudelix_10() -> Constraints {
     Constraints { filter_specs: specs, freq_range: None, fs: Some(44100.0), min_std: Some(MinStd::Default) }
 }
 
+fn restricted() -> Constraints {
+    Constraints {
+        filter_specs: vec![
+            FilterSpec { filter_type: Some(FilterType::PK), fc: None, q: None, gain: None,
+                optimize_fc: None, optimize_q: None, optimize_gain: None,
+                fc_range: None, q_range: Some((1.0, 5.0)), gain_range: (-6.0, 6.0) },
+            FilterSpec { filter_type: Some(FilterType::PK), fc: None, q: None, gain: None,
+                optimize_fc: None, optimize_q: None, optimize_gain: None,
+                fc_range: None, q_range: Some((1.0, 5.0)), gain_range: (-6.0, 6.0) },
+            FilterSpec { filter_type: Some(FilterType::PK), fc: None, q: None, gain: None,
+                optimize_fc: None, optimize_q: None, optimize_gain: None,
+                fc_range: None, q_range: Some((1.0, 5.0)), gain_range: (-6.0, 6.0) },
+        ],
+        freq_range: None, fs: Some(44100.0), min_std: Some(MinStd::Default),
+    }
+}
+
 fn standard() -> Constraints {
     Constraints {
         filter_specs: vec![
@@ -113,6 +130,9 @@ fn report(case: &str, constraints: &Constraints) {
 
 #[test]
 fn same_x0_comparison() {
-    report("hexa__bass_heavy__qudelix_10", &qudelix_10());
-    report("hexa__bass_heavy__standard",   &standard());
+    report("hexa__bass_heavy__qudelix_10",      &qudelix_10());
+    report("hexa__bass_heavy__standard",        &standard());
+    report("hexa__diffuse_field__restricted",   &restricted());
+    report("origin_s__bass_heavy__qudelix_10",  &qudelix_10());
+    report("zero2__bass_heavy__restricted",     &restricted());
 }

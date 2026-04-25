@@ -518,6 +518,48 @@ The critical validation phase. Every combination must pass.
 
 ---
 
+### Phase 10: Revisit SLSQP-Parity Gap (deferred from Phase 7)
+
+Phase 7 closed at 87/90 golden cases. The remaining 3 failures
+(`hexa__diffuse_field__restricted` 2.29 dB, `origin_s__bass_heavy__qudelix_10`
+0.66 dB, `zero2__bass_heavy__restricted` 0.51 dB) are SLSQP-implementation
+divergence between `relf/slsqp` (Rust) and scipy's `fmin_slsqp` (Fortran via
+Python). Init and correction curves are bit-identical to AutoEQ; the gap is
+purely in the solver's local-minimum selection. See ARCHITECTURE.md "Known
+Divergences" for details.
+
+**Tasks (in order of effort, lowest first):**
+
+1. **Solver tuning.** Inspect `relf/slsqp` for exposed knobs: finite-difference
+   step size, line-search parameters, active-set tolerances. Try matching
+   scipy's defaults exactly. Re-run the 3 failing cases. Cheap to try; may
+   close 1–2 marginal cases (the 0.51 / 0.57 ones) but unlikely to help
+   `hexa__diffuse_field__restricted`.
+
+2. **Alternate Rust SLSQP.** Survey `crates.io` for other SLSQP / sequential
+   QP implementations (e.g. `argmin`, `cobyla`, custom ports). Benchmark each
+   against the 3 failing cases and against the existing 87 passing cases (no
+   regressions). Decision criteria: pass rate, runtime, dependency cost.
+
+3. **Reference oracle via PyO3.** Wrap scipy's `fmin_slsqp` through PyO3 and
+   gate it behind a `cfg(test)` feature. Use it only as a per-case "what would
+   AutoEQ do" oracle for diffing solver trajectories — not as a runtime
+   dependency. Helps diagnose *where* the trajectories diverge (iteration
+   count, intermediate gradients, active constraint flips).
+
+4. **Cost-surface analysis.** For each of the 3 failing cases, plot the loss
+   landscape near both solver's final solutions. If both are valid local
+   minima of equivalent quality, the goldens may be over-specifying the test
+   — consider relaxing the assertion to "RMSE ≤ 0.5 dB OR loss ≤
+   golden_loss + ε" so equivalent-quality solutions pass.
+
+5. **Decision point.** If after (1)–(4) we still have unresolved cases,
+   document them as permanent known divergences and ship 87/90. The 0.5 dB
+   threshold was the regression gate; in practice these are inaudible
+   filter-cascade differences for an end user.
+
+---
+
 ## Test Strategy Summary
 
 | Level | What | Count (est.) |

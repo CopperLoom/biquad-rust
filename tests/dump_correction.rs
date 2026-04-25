@@ -12,6 +12,8 @@ const CASES: &[(&str, &str)] = &[
     ("origin_s", "bright"),
     ("origin_s", "flat"),
     ("zero2",    "bass_heavy"),
+    ("hexa",     "diffuse_field"),
+    ("origin_s", "bass_heavy"),
 ];
 
 #[test]

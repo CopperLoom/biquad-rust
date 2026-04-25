@@ -39,6 +39,14 @@ CONSTRAINT_SETS = {
         ],
         'filter_defaults': {'min_q': 0.5, 'max_q': 10.0},
     },
+    'restricted': {
+        'filters': [
+            {'type': 'PEAKING', 'min_gain': -6.0, 'max_gain': 6.0},
+            {'type': 'PEAKING', 'min_gain': -6.0, 'max_gain': 6.0},
+            {'type': 'PEAKING', 'min_gain': -6.0, 'max_gain': 6.0},
+        ],
+        'filter_defaults': {'min_q': 1.0, 'max_q': 5.0},
+    },
 }
 FILTER_TYPE_MAP = {'Peaking': 'PK', 'LowShelf': 'LSQ', 'HighShelf': 'HSQ'}
 
@@ -84,8 +92,11 @@ def run_pipeline(iem, target_name, constraint_name):
     }
 
 CASES = [
-    ('hexa', 'bass_heavy', 'qudelix_10'),
-    ('hexa', 'bass_heavy', 'standard'),
+    ('hexa',     'bass_heavy',    'qudelix_10'),
+    ('hexa',     'bass_heavy',    'standard'),
+    ('hexa',     'diffuse_field', 'restricted'),
+    ('origin_s', 'bass_heavy',    'qudelix_10'),
+    ('zero2',    'bass_heavy',    'restricted'),
 ]
 
 def main():
