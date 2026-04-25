@@ -57,7 +57,12 @@ pub fn center(fr: &[FreqPoint]) -> Vec<FreqPoint> {
     let freqs: Vec<f64> = fr.iter().map(|p| p.freq).collect();
     let dbs: Vec<f64> = fr.iter().map(|p| p.db).collect();
     let offset = log_linear_at(&freqs, &dbs, 1000.0);
-    fr.iter().map(|p| FreqPoint { freq: p.freq, db: p.db - offset }).collect()
+    fr.iter()
+        .map(|p| FreqPoint {
+            freq: p.freq,
+            db: p.db - offset,
+        })
+        .collect()
 }
 
 /// Compute error curve: error = measured − target.
@@ -84,15 +89,18 @@ pub fn compensate(measured: &[FreqPoint], target: &[FreqPoint]) -> Vec<FreqPoint
     measured
         .iter()
         .zip(target_centered.iter())
-        .map(|(m, t)| FreqPoint { freq: m.freq, db: m.db - t })
+        .map(|(m, t)| FreqPoint {
+            freq: m.freq,
+            db: m.db - t,
+        })
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use approx::assert_abs_diff_eq;
     use crate::interpolate::build_grid;
+    use approx::assert_abs_diff_eq;
 
     fn canonical_grid() -> Vec<f64> {
         build_grid(20.0, 20000.0, 1.01)
@@ -101,8 +109,10 @@ mod tests {
     #[test]
     fn identical_inputs_give_zero_error() {
         let freqs = canonical_grid();
-        let fr: Vec<FreqPoint> =
-            freqs.iter().map(|&f| FreqPoint { freq: f, db: 0.0 }).collect();
+        let fr: Vec<FreqPoint> = freqs
+            .iter()
+            .map(|&f| FreqPoint { freq: f, db: 0.0 })
+            .collect();
         let error = compensate(&fr, &fr);
         for pt in &error {
             assert_abs_diff_eq!(pt.db, 0.0, epsilon = 1e-10);
@@ -116,10 +126,15 @@ mod tests {
         let measured: Vec<FreqPoint> = freqs
             .iter()
             .enumerate()
-            .map(|(i, &f)| FreqPoint { freq: f, db: i as f64 * 0.01 })
+            .map(|(i, &f)| FreqPoint {
+                freq: f,
+                db: i as f64 * 0.01,
+            })
             .collect();
-        let target: Vec<FreqPoint> =
-            freqs.iter().map(|&f| FreqPoint { freq: f, db: 3.0 }).collect();
+        let target: Vec<FreqPoint> = freqs
+            .iter()
+            .map(|&f| FreqPoint { freq: f, db: 3.0 })
+            .collect();
         let error = compensate(&measured, &target);
         for (e, m) in error.iter().zip(&measured) {
             assert_abs_diff_eq!(e.db, m.db, epsilon = 1e-10);
@@ -131,10 +146,17 @@ mod tests {
         // Target = log10(f): after centering, target[i] = log10(f/1000).
         // error = 0 - log10(f/1000) = log10(1000/f)
         let freqs = canonical_grid();
-        let measured: Vec<FreqPoint> =
-            freqs.iter().map(|&f| FreqPoint { freq: f, db: 0.0 }).collect();
-        let target: Vec<FreqPoint> =
-            freqs.iter().map(|&f| FreqPoint { freq: f, db: f.log10() }).collect();
+        let measured: Vec<FreqPoint> = freqs
+            .iter()
+            .map(|&f| FreqPoint { freq: f, db: 0.0 })
+            .collect();
+        let target: Vec<FreqPoint> = freqs
+            .iter()
+            .map(|&f| FreqPoint {
+                freq: f,
+                db: f.log10(),
+            })
+            .collect();
         let error = compensate(&measured, &target);
         for pt in &error {
             let expected = -(pt.freq.log10() - 3.0);
@@ -147,14 +169,32 @@ mod tests {
         // Target starting at 100 Hz with a known slope; query at 20 Hz should extrapolate,
         // not clamp to the 100 Hz boundary value.
         let target = vec![
-            FreqPoint { freq: 100.0, db: 4.0 },
-            FreqPoint { freq: 1000.0, db: 2.0 },
-            FreqPoint { freq: 10000.0, db: 0.0 },
+            FreqPoint {
+                freq: 100.0,
+                db: 4.0,
+            },
+            FreqPoint {
+                freq: 1000.0,
+                db: 2.0,
+            },
+            FreqPoint {
+                freq: 10000.0,
+                db: 0.0,
+            },
         ];
         let measured = vec![
-            FreqPoint { freq: 20.0, db: 0.0 },
-            FreqPoint { freq: 1000.0, db: 0.0 },
-            FreqPoint { freq: 10000.0, db: 0.0 },
+            FreqPoint {
+                freq: 20.0,
+                db: 0.0,
+            },
+            FreqPoint {
+                freq: 1000.0,
+                db: 0.0,
+            },
+            FreqPoint {
+                freq: 10000.0,
+                db: 0.0,
+            },
         ];
         let error = compensate(&measured, &target);
 
@@ -162,6 +202,10 @@ mod tests {
         // 100–1000 Hz slope leftward, giving a value > 4.0. After centering (subtract
         // ~2.0 at 1 kHz) the 20 Hz target > 2.0, so error < -2.0.
         // With clamping, target at 20 Hz = 4.0, centered ≈ 2.0, error ≈ -2.0.
-        assert!(error[0].db < -2.0, "expected extrapolation (< -2.0), got {}", error[0].db);
+        assert!(
+            error[0].db < -2.0,
+            "expected extrapolation (< -2.0), got {}",
+            error[0].db
+        );
     }
 }

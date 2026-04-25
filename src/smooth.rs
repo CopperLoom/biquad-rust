@@ -3,6 +3,7 @@ use crate::types::FreqPoint;
 const TREBLE_F_LOWER: f64 = 6000.0;
 const TREBLE_F_UPPER: f64 = 8000.0;
 
+#[allow(clippy::needless_range_loop)]
 fn gauss_jordan_solve(mut aug: Vec<Vec<f64>>) -> Vec<f64> {
     let n = aug.len();
     for col in 0..n {
@@ -32,7 +33,10 @@ fn gauss_jordan_solve(mut aug: Vec<Vec<f64>>) -> Vec<f64> {
 /// Savitzky-Golay FIR weights for interior smoothing (poly_order=2, deriv=0).
 /// Returns coefficients to dot with data[i-m..=i+m] to get smoothed value at i.
 pub fn savgol_coeffs(window_size: usize, poly_order: usize) -> Vec<f64> {
-    assert!(window_size >= 3 && window_size % 2 == 1, "window_size must be odd and >= 3");
+    assert!(
+        window_size >= 3 && window_size % 2 == 1,
+        "window_size must be odd and >= 3"
+    );
     assert!(poly_order < window_size);
     let m = (window_size - 1) / 2;
     let np1 = poly_order + 1;
@@ -47,6 +51,7 @@ pub fn savgol_coeffs(window_size: usize, poly_order: usize) -> Vec<f64> {
 
     // A^T A
     let mut ata = vec![vec![0.0f64; np1]; np1];
+    #[allow(clippy::needless_range_loop)]
     for k in 0..window_size {
         for i in 0..np1 {
             for j in 0..np1 {
@@ -111,7 +116,10 @@ pub fn savgol_filter(data: &[f64], window_size: usize) -> Vec<f64> {
     let poly_order = 2usize;
     let m = (window_size - 1) / 2;
     let n = data.len();
-    assert!(n >= window_size, "data length {n} < window_size {window_size}");
+    assert!(
+        n >= window_size,
+        "data length {n} < window_size {window_size}"
+    );
 
     let coeffs = savgol_coeffs(window_size, poly_order);
     let mut out = vec![0.0f64; n];
@@ -145,7 +153,7 @@ pub fn smoothing_window_size(freqs: &[f64], octaves: f64) -> usize {
     let step_size: f64 =
         freqs.windows(2).map(|w| w[1] / w[0]).sum::<f64>() / (freqs.len() - 1) as f64;
     let n = (k.ln() / step_size.ln()).round() as usize;
-    let n = if n % 2 == 0 { n + 1 } else { n };
+    let n = if n.is_multiple_of(2) { n + 1 } else { n };
     n.max(3)
 }
 
@@ -160,7 +168,11 @@ pub fn log_f_sigmoid(f: f64, f_lower: f64, f_upper: f64) -> f64 {
 
 /// Two-zone smooth: normal window below 6 kHz, treble window above 8 kHz, sigmoid blend.
 /// Matches AutoEQ's `_smoothen()`.
-pub fn two_zone_smooth(fr: &[FreqPoint], normal_octaves: f64, treble_octaves: f64) -> Vec<FreqPoint> {
+pub fn two_zone_smooth(
+    fr: &[FreqPoint],
+    normal_octaves: f64,
+    treble_octaves: f64,
+) -> Vec<FreqPoint> {
     let freqs: Vec<f64> = fr.iter().map(|p| p.freq).collect();
     let data: Vec<f64> = fr.iter().map(|p| p.db).collect();
 
@@ -188,22 +200,26 @@ pub fn smooth(fr: &[FreqPoint], window_octaves: f64) -> Vec<FreqPoint> {
     let data: Vec<f64> = fr.iter().map(|p| p.db).collect();
     let w = smoothing_window_size(&freqs, window_octaves);
     let smoothed = savgol_filter(&data, w);
-    fr.iter().zip(smoothed).map(|(p, db)| FreqPoint { freq: p.freq, db }).collect()
+    fr.iter()
+        .zip(smoothed)
+        .map(|(p, db)| FreqPoint { freq: p.freq, db })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use approx::assert_abs_diff_eq;
     use crate::interpolate::build_grid;
+    use approx::assert_abs_diff_eq;
 
     #[test]
     fn savgol_preserves_quadratic() {
         // SG filter with poly_order=2 must reproduce any degree-2 polynomial exactly,
         // including at edge samples (mode='interp').
         let n = 50usize;
-        let data: Vec<f64> =
-            (0..n).map(|i| 3.0 + 0.5 * i as f64 - 0.02 * (i * i) as f64).collect();
+        let data: Vec<f64> = (0..n)
+            .map(|i| 3.0 + 0.5 * i as f64 - 0.02 * (i * i) as f64)
+            .collect();
         let out = savgol_filter(&data, 7);
         for i in 0..n {
             assert_abs_diff_eq!(out[i], data[i], epsilon = 1e-9);
@@ -243,16 +259,26 @@ mod tests {
     fn sigmoid_is_half_at_geometric_mean() {
         // Geometric mean is the sigmoid's inflection point → exactly 0.5
         let f_center = (TREBLE_F_LOWER * TREBLE_F_UPPER).sqrt();
-        assert_abs_diff_eq!(log_f_sigmoid(f_center, TREBLE_F_LOWER, TREBLE_F_UPPER), 0.5, epsilon = 1e-10);
+        assert_abs_diff_eq!(
+            log_f_sigmoid(f_center, TREBLE_F_LOWER, TREBLE_F_UPPER),
+            0.5,
+            epsilon = 1e-10
+        );
     }
 
     #[test]
     fn two_zone_blend_is_between_zones_at_7khz() {
         let freqs = build_grid(20.0, 20000.0, 1.01);
-        let data: Vec<f64> =
-            freqs.iter().enumerate().map(|(i, _)| (i as f64 * 0.05).sin() * 5.0).collect();
-        let fr: Vec<FreqPoint> =
-            freqs.iter().zip(&data).map(|(&f, &db)| FreqPoint { freq: f, db }).collect();
+        let data: Vec<f64> = freqs
+            .iter()
+            .enumerate()
+            .map(|(i, _)| (i as f64 * 0.05).sin() * 5.0)
+            .collect();
+        let fr: Vec<FreqPoint> = freqs
+            .iter()
+            .zip(&data)
+            .map(|(&f, &db)| FreqPoint { freq: f, db })
+            .collect();
 
         let smoothed = two_zone_smooth(&fr, 1.0 / 12.0, 2.0);
 
@@ -265,6 +291,9 @@ mod tests {
         let blended = smoothed[idx].db;
         let lo = y_normal[idx].min(y_treble[idx]) - 1e-10;
         let hi = y_normal[idx].max(y_treble[idx]) + 1e-10;
-        assert!(blended >= lo && blended <= hi, "blend {blended:.4} not in [{lo:.4}, {hi:.4}]");
+        assert!(
+            blended >= lo && blended <= hi,
+            "blend {blended:.4} not in [{lo:.4}, {hi:.4}]"
+        );
     }
 }
