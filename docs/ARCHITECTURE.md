@@ -813,6 +813,24 @@ TypeScript: `biquadResponse.ts`.
 
 ---
 
+## Performance
+
+Benchmarks run with `cargo bench` (release profile, Apple M-series).
+
+| Config | Time |
+|--------|------|
+| 5-band standard (LSQ + PK×3 + HSQ) | 17.8 ms |
+| 10-band Qudelix (LSQ + PK×8 + HSQ) | 82.8 ms |
+
+**Hot path:** `joint_loss` → `biquad_response` per filter per SLSQP iteration. Called
+O(iterations × free_params) times (finite-difference gradients).
+
+**Optimization:** `joint_loss` fuses the total-response accumulation and sharpness-penalty
+computation into a single per-filter loop, reusing each filter's `biquad_response` output
+for both. Eliminates one redundant `biquad_response` call per PK filter per loss evaluation.
+
+---
+
 ## Known Divergences from AutoEQ
 
 Verified 2026-04-25 across the 90-case golden matrix. After fixing `interpolate` to
