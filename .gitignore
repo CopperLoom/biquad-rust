@@ -1,2 +1,4 @@
 /target
+/docs
 Cargo.lock
+CLAUDE.md

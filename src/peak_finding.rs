@@ -39,10 +39,7 @@ pub(crate) fn local_maxima(y: &[f64]) -> Vec<usize> {
 /// scipy peak_prominences: (prominences, left_bases, right_bases).
 /// Scans left/right from each peak until a strictly higher sample is found.
 /// Equal-height neighbors do NOT terminate the scan.
-pub(crate) fn peak_prominences(
-    y: &[f64],
-    peaks: &[usize],
-) -> (Vec<f64>, Vec<usize>, Vec<usize>) {
+pub(crate) fn peak_prominences(y: &[f64], peaks: &[usize]) -> (Vec<f64>, Vec<usize>, Vec<usize>) {
     let n = y.len();
     let mut prominences = Vec::with_capacity(peaks.len());
     let mut left_bases = Vec::with_capacity(peaks.len());
@@ -208,8 +205,10 @@ pub fn find_peaks_full(
     }
 
     // Filter by height
-    let candidates: Vec<usize> =
-        candidates.into_iter().filter(|&i| y[i] >= min_height).collect();
+    let candidates: Vec<usize> = candidates
+        .into_iter()
+        .filter(|&i| y[i] >= min_height)
+        .collect();
 
     if candidates.is_empty() {
         return empty_props();
@@ -237,8 +236,14 @@ pub fn find_peaks_full(
     }
 
     // Compute widths
-    let (ws, whs, lips, rips) =
-        peak_widths_at(y, &filtered, 0.5, &filtered_proms, &filtered_lbs, &filtered_rbs);
+    let (ws, whs, lips, rips) = peak_widths_at(
+        y,
+        &filtered,
+        0.5,
+        &filtered_proms,
+        &filtered_lbs,
+        &filtered_rbs,
+    );
 
     // Filter by width
     let mut final_inds: Vec<usize> = Vec::new();
@@ -295,7 +300,6 @@ fn empty_props() -> (Vec<usize>, PeakProps) {
         },
     )
 }
-
 
 #[cfg(test)]
 mod tests {

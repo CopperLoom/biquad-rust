@@ -29,8 +29,7 @@ pub fn load_fr(iem: &str) -> Vec<FreqPoint> {
         .join(format!("{iem}.json"));
     let json = fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("Failed to read FR fixture {iem}: {e}"));
-    serde_json::from_str(&json)
-        .unwrap_or_else(|e| panic!("Failed to parse FR fixture {iem}: {e}"))
+    serde_json::from_str(&json).unwrap_or_else(|e| panic!("Failed to parse FR fixture {iem}: {e}"))
 }
 
 pub fn load_target(target: &str) -> Vec<FreqPoint> {

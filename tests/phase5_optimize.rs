@@ -2,46 +2,66 @@ mod helpers;
 
 use biquad_rust::optimize::{optimize, total_response};
 use biquad_rust::types::{Constraints, FilterSpec, FilterType, MinStd};
-use helpers::{load_fr, load_target, load_golden, optimizer_grid, rmse};
+use helpers::{load_fr, load_golden, load_target, optimizer_grid, rmse};
 
 fn standard_constraints() -> Constraints {
     let specs = vec![
         FilterSpec {
             filter_type: Some(FilterType::LSQ),
-            fc: None, q: None, gain: None,
-            optimize_fc: None, optimize_q: None, optimize_gain: None,
+            fc: None,
+            q: None,
+            gain: None,
+            optimize_fc: None,
+            optimize_q: None,
+            optimize_gain: None,
             fc_range: None,
             q_range: Some((0.5, 10.0)),
             gain_range: (-12.0, 12.0),
         },
         FilterSpec {
             filter_type: Some(FilterType::PK),
-            fc: None, q: None, gain: None,
-            optimize_fc: None, optimize_q: None, optimize_gain: None,
+            fc: None,
+            q: None,
+            gain: None,
+            optimize_fc: None,
+            optimize_q: None,
+            optimize_gain: None,
             fc_range: None,
             q_range: Some((0.5, 10.0)),
             gain_range: (-12.0, 12.0),
         },
         FilterSpec {
             filter_type: Some(FilterType::PK),
-            fc: None, q: None, gain: None,
-            optimize_fc: None, optimize_q: None, optimize_gain: None,
+            fc: None,
+            q: None,
+            gain: None,
+            optimize_fc: None,
+            optimize_q: None,
+            optimize_gain: None,
             fc_range: None,
             q_range: Some((0.5, 10.0)),
             gain_range: (-12.0, 12.0),
         },
         FilterSpec {
             filter_type: Some(FilterType::PK),
-            fc: None, q: None, gain: None,
-            optimize_fc: None, optimize_q: None, optimize_gain: None,
+            fc: None,
+            q: None,
+            gain: None,
+            optimize_fc: None,
+            optimize_q: None,
+            optimize_gain: None,
             fc_range: None,
             q_range: Some((0.5, 10.0)),
             gain_range: (-12.0, 12.0),
         },
         FilterSpec {
             filter_type: Some(FilterType::HSQ),
-            fc: None, q: None, gain: None,
-            optimize_fc: None, optimize_q: None, optimize_gain: None,
+            fc: None,
+            q: None,
+            gain: None,
+            optimize_fc: None,
+            optimize_q: None,
+            optimize_gain: None,
             fc_range: None,
             q_range: Some((0.5, 10.0)),
             gain_range: (-12.0, 12.0),
@@ -56,7 +76,11 @@ fn standard_constraints() -> Constraints {
 }
 
 /// Interpolate filter responses + pregain to the optimizer grid; returns total cascade in dB.
-fn cascade_on_grid(result: &biquad_rust::types::OptimizeResult, freqs: &[f64], fs: f64) -> Vec<f64> {
+fn cascade_on_grid(
+    result: &biquad_rust::types::OptimizeResult,
+    freqs: &[f64],
+    fs: f64,
+) -> Vec<f64> {
     let resp = total_response(&result.filters, freqs, fs);
     resp.iter().map(|&v| v + result.pregain).collect()
 }
@@ -67,12 +91,15 @@ fn smoke_blessing3_harman_standard() {
     let target = load_target("harman_ie_2019");
     let constraints = standard_constraints();
 
-    let result = optimize(&measured, &target, &constraints)
-        .expect("optimize returned Err");
+    let result = optimize(&measured, &target, &constraints).expect("optimize returned Err");
 
     assert_eq!(result.filters.len(), 5, "expected 5 filters");
     assert!(result.pregain.is_finite(), "pregain is not finite");
-    assert!(result.pregain <= 0.0, "pregain should be <= 0, got {}", result.pregain);
+    assert!(
+        result.pregain <= 0.0,
+        "pregain should be <= 0, got {}",
+        result.pregain
+    );
 
     // Compare filter cascade + pregain against golden on the optimizer grid
     let golden = load_golden("blessing3__harman_ie_2019__standard.json");

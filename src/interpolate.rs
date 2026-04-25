@@ -52,7 +52,11 @@ pub fn interpolate(fr: &[FreqPoint], options: &InterpolateOptions) -> Vec<FreqPo
             };
 
             let span = log_freqs[hi] - log_freqs[lo];
-            let t = if span == 0.0 { 0.0 } else { (log_f - log_freqs[lo]) / span };
+            let t = if span == 0.0 {
+                0.0
+            } else {
+                (log_f - log_freqs[lo]) / span
+            };
             let db = dbs[lo] + t * (dbs[hi] - dbs[lo]);
             FreqPoint { freq, db }
         })
@@ -87,11 +91,24 @@ mod tests {
     #[test]
     fn interpolate_at_original_points_is_exact() {
         let fr = vec![
-            FreqPoint { freq: 100.0, db: 0.0 },
-            FreqPoint { freq: 1000.0, db: 3.0 },
-            FreqPoint { freq: 10000.0, db: -2.0 },
+            FreqPoint {
+                freq: 100.0,
+                db: 0.0,
+            },
+            FreqPoint {
+                freq: 1000.0,
+                db: 3.0,
+            },
+            FreqPoint {
+                freq: 10000.0,
+                db: -2.0,
+            },
         ];
-        let opts = InterpolateOptions { step: Some(1.01), f_min: Some(100.0), f_max: Some(100.0) };
+        let opts = InterpolateOptions {
+            step: Some(1.01),
+            f_min: Some(100.0),
+            f_max: Some(100.0),
+        };
         let result = interpolate(&fr, &opts);
         assert_eq!(result.len(), 1);
         assert_abs_diff_eq!(result[0].db, 0.0, epsilon = 1e-10);
@@ -102,24 +119,46 @@ mod tests {
         // Slope (5 → 0 dB) over (log 100 → log 1000) = -5/log(10) per nat.
         // At 20 Hz: db = 5 + (ln 20 - ln 100) / (ln 1000 - ln 100) * (0 - 5)
         let fr = vec![
-            FreqPoint { freq: 100.0, db: 5.0 },
-            FreqPoint { freq: 1000.0, db: 0.0 },
+            FreqPoint {
+                freq: 100.0,
+                db: 5.0,
+            },
+            FreqPoint {
+                freq: 1000.0,
+                db: 0.0,
+            },
         ];
-        let opts = InterpolateOptions { step: Some(1.01), f_min: Some(20.0), f_max: Some(20.0) };
+        let opts = InterpolateOptions {
+            step: Some(1.01),
+            f_min: Some(20.0),
+            f_max: Some(20.0),
+        };
         let result = interpolate(&fr, &opts);
-        let expected = 5.0 + (20f64.ln() - 100f64.ln()) / (1000f64.ln() - 100f64.ln()) * (0.0 - 5.0);
+        let expected =
+            5.0 + (20f64.ln() - 100f64.ln()) / (1000f64.ln() - 100f64.ln()) * (0.0 - 5.0);
         assert_abs_diff_eq!(result[0].db, expected, epsilon = 1e-10);
     }
 
     #[test]
     fn interpolate_extrapolates_above() {
         let fr = vec![
-            FreqPoint { freq: 100.0, db: 0.0 },
-            FreqPoint { freq: 1000.0, db: 5.0 },
+            FreqPoint {
+                freq: 100.0,
+                db: 0.0,
+            },
+            FreqPoint {
+                freq: 1000.0,
+                db: 5.0,
+            },
         ];
-        let opts = InterpolateOptions { step: Some(1.01), f_min: Some(5000.0), f_max: Some(5000.0) };
+        let opts = InterpolateOptions {
+            step: Some(1.01),
+            f_min: Some(5000.0),
+            f_max: Some(5000.0),
+        };
         let result = interpolate(&fr, &opts);
-        let expected = 0.0 + (5000f64.ln() - 100f64.ln()) / (1000f64.ln() - 100f64.ln()) * (5.0 - 0.0);
+        let expected =
+            0.0 + (5000f64.ln() - 100f64.ln()) / (1000f64.ln() - 100f64.ln()) * (5.0 - 0.0);
         assert_abs_diff_eq!(result[0].db, expected, epsilon = 1e-10);
     }
 
@@ -127,11 +166,21 @@ mod tests {
     fn interpolate_midpoint_is_linear_in_log_freq() {
         // Two points at log10(100)=2 and log10(10000)=4; midpoint log-freq is log10(1000)=3
         let fr = vec![
-            FreqPoint { freq: 100.0, db: 0.0 },
-            FreqPoint { freq: 10000.0, db: 4.0 },
+            FreqPoint {
+                freq: 100.0,
+                db: 0.0,
+            },
+            FreqPoint {
+                freq: 10000.0,
+                db: 4.0,
+            },
         ];
         // 1000 Hz is the geometric midpoint of 100–10000
-        let opts = InterpolateOptions { step: Some(1.01), f_min: Some(1000.0), f_max: Some(1000.0) };
+        let opts = InterpolateOptions {
+            step: Some(1.01),
+            f_min: Some(1000.0),
+            f_max: Some(1000.0),
+        };
         let result = interpolate(&fr, &opts);
         // Expect exactly 2.0 dB (midpoint)
         assert_abs_diff_eq!(result[0].db, 2.0, epsilon = 1e-10);

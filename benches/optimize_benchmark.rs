@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use std::{fs, path::Path};
 
 use biquad_rust::{
@@ -27,8 +27,12 @@ fn load_target(target: &str) -> Vec<FreqPoint> {
 fn pk_spec(gain_range: (f64, f64), q_range: (f64, f64)) -> FilterSpec {
     FilterSpec {
         filter_type: Some(FilterType::PK),
-        fc: None, q: None, gain: None,
-        optimize_fc: None, optimize_q: None, optimize_gain: None,
+        fc: None,
+        q: None,
+        gain: None,
+        optimize_fc: None,
+        optimize_q: None,
+        optimize_gain: None,
         fc_range: None,
         q_range: Some(q_range),
         gain_range,
@@ -38,8 +42,12 @@ fn pk_spec(gain_range: (f64, f64), q_range: (f64, f64)) -> FilterSpec {
 fn shelf_spec(ft: FilterType, gain_range: (f64, f64), q_range: (f64, f64)) -> FilterSpec {
     FilterSpec {
         filter_type: Some(ft),
-        fc: None, q: None, gain: None,
-        optimize_fc: None, optimize_q: None, optimize_gain: None,
+        fc: None,
+        q: None,
+        gain: None,
+        optimize_fc: None,
+        optimize_q: None,
+        optimize_gain: None,
         fc_range: None,
         q_range: Some(q_range),
         gain_range,
@@ -81,32 +89,28 @@ fn bench_standard_5band(c: &mut Criterion) {
     let fr = load_fr("blessing3");
     let target = load_target("harman_ie_2019");
     let constraints = standard_constraints();
-    c.bench_function("optimize/standard_5band (blessing3 + harman_ie_2019)", |b| {
-        b.iter(|| {
-            optimize(
-                black_box(&fr),
-                black_box(&target),
-                black_box(&constraints),
-            )
-            .unwrap()
-        })
-    });
+    c.bench_function(
+        "optimize/standard_5band (blessing3 + harman_ie_2019)",
+        |b| {
+            b.iter(|| {
+                optimize(black_box(&fr), black_box(&target), black_box(&constraints)).unwrap()
+            })
+        },
+    );
 }
 
 fn bench_qudelix_10band(c: &mut Criterion) {
     let fr = load_fr("blessing3");
     let target = load_target("harman_ie_2019");
     let constraints = qudelix_10_constraints();
-    c.bench_function("optimize/qudelix_10band (blessing3 + harman_ie_2019)", |b| {
-        b.iter(|| {
-            optimize(
-                black_box(&fr),
-                black_box(&target),
-                black_box(&constraints),
-            )
-            .unwrap()
-        })
-    });
+    c.bench_function(
+        "optimize/qudelix_10band (blessing3 + harman_ie_2019)",
+        |b| {
+            b.iter(|| {
+                optimize(black_box(&fr), black_box(&target), black_box(&constraints)).unwrap()
+            })
+        },
+    );
 }
 
 criterion_group!(benches, bench_standard_5band, bench_qudelix_10band);

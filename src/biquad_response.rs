@@ -1,5 +1,6 @@
 use crate::types::FilterType;
 
+/// Normalized biquad transfer-function coefficients (a0 = 1).
 pub struct BiquadCoeffs {
     pub b0: f64,
     pub b1: f64,
@@ -8,6 +9,8 @@ pub struct BiquadCoeffs {
     pub a2: f64,
 }
 
+/// Compute normalized biquad coefficients from filter parameters.
+/// Formulas from the Audio EQ Cookbook; matches AutoEQ's `PEQFilter.biquad_coefficients()`.
 pub fn biquad_coeffs(filter_type: FilterType, fc: f64, gain: f64, q: f64, fs: f64) -> BiquadCoeffs {
     let a = 10_f64.powf(gain / 40.0);
     let sqrt_a = a.sqrt();
@@ -59,12 +62,12 @@ pub fn eval_magnitude(c: &BiquadCoeffs, freq: f64, fs: f64) -> f64 {
 
     let num = (c.b0 + c.b1 + c.b2).powi(2)
         + (c.b0 * c.b2 * phi - (c.b1 * (c.b0 + c.b2) + 4.0 * c.b0 * c.b2)) * phi;
-    let den = (1.0 + c.a1 + c.a2).powi(2)
-        + (c.a2 * phi - (c.a1 * (1.0 + c.a2) + 4.0 * c.a2)) * phi;
+    let den = (1.0 + c.a1 + c.a2).powi(2) + (c.a2 * phi - (c.a1 * (1.0 + c.a2) + 4.0 * c.a2)) * phi;
 
     10.0 * num.max(1e-30).log10() - 10.0 * den.max(1e-30).log10()
 }
 
+/// Evaluate filter magnitude in dB at each frequency in `frequencies`.
 pub fn biquad_response(
     filter_type: FilterType,
     fc: f64,
@@ -74,7 +77,10 @@ pub fn biquad_response(
     fs: f64,
 ) -> Vec<f64> {
     let coeffs = biquad_coeffs(filter_type, fc, gain, q, fs);
-    frequencies.iter().map(|&f| eval_magnitude(&coeffs, f, fs)).collect()
+    frequencies
+        .iter()
+        .map(|&f| eval_magnitude(&coeffs, f, fs))
+        .collect()
 }
 
 #[cfg(test)]

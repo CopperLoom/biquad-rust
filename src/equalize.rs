@@ -1,11 +1,9 @@
 use crate::peak_finding::find_peaks;
-use crate::smooth::{log_f_sigmoid, two_zone_smooth};
+use crate::smooth::two_zone_smooth;
 use crate::types::FreqPoint;
 
 const MAX_GAIN: f64 = 6.0;
 const MAX_SLOPE: f64 = 18.0;
-const TREBLE_F_LOWER: f64 = 6000.0;
-const TREBLE_F_UPPER: f64 = 8000.0;
 
 fn log_log_gradient(x1: f64, x0: f64, y1: f64, y0: f64) -> f64 {
     (y1 - y0) / (x1 / x0).log2()
@@ -17,8 +15,7 @@ pub fn protection_mask(y: &[f64], peak_inds: &[usize], dip_inds: &[usize]) -> Ve
     let n = y.len();
 
     let (synth_inds, dip_levels) = if !peak_inds.is_empty()
-        && (dip_inds.is_empty()
-            || peak_inds[peak_inds.len() - 1] > dip_inds[dip_inds.len() - 1])
+        && (dip_inds.is_empty() || peak_inds[peak_inds.len() - 1] > dip_inds[dip_inds.len() - 1])
     {
         // Last peak after last dip: append real argmin after last peak
         let last_peak = peak_inds[peak_inds.len() - 1];
@@ -60,9 +57,11 @@ pub fn protection_mask(y: &[f64], peak_inds: &[usize], dip_inds: &[usize]) -> Ve
             .enumerate()
             .filter(|&(_, v)| *v >= target_left)
             .map(|(j, _)| j)
-            .last()
+            .next_back()
             .map(|j| j + 1)
-            .expect("protection_mask invariant: y[..dip_ind] must contain a sample >= left dip level");
+            .expect(
+                "protection_mask invariant: y[..dip_ind] must contain a sample >= left dip level",
+            );
 
         // First idx in y[dip_ind..] where y >= target_right, offset by dip_ind - 1.
         let right_ind = y[dip_ind..]
@@ -70,12 +69,13 @@ pub fn protection_mask(y: &[f64], peak_inds: &[usize], dip_inds: &[usize]) -> Ve
             .enumerate()
             .find(|&(_, v)| *v >= target_right)
             .map(|(j, _)| j + dip_ind.saturating_sub(1))
-            .expect("protection_mask invariant: y[dip_ind..] must contain a sample >= right dip level");
+            .expect(
+                "protection_mask invariant: y[dip_ind..] must contain a sample >= right dip level",
+            );
 
-        for j in left_ind..=right_ind {
-            if j < n {
-                mask[j] = true;
-            }
+        let end = right_ind.min(n - 1);
+        if left_ind <= end {
+            mask[left_ind..=end].fill(true);
         }
     }
 
@@ -87,8 +87,7 @@ pub fn find_rtl_start(y: &[f64], peak_inds: &[usize], dip_inds: &[usize]) -> usi
     let n = y.len();
 
     if !peak_inds.is_empty()
-        && (dip_inds.is_empty()
-            || peak_inds[peak_inds.len() - 1] > dip_inds[dip_inds.len() - 1])
+        && (dip_inds.is_empty() || peak_inds[peak_inds.len() - 1] > dip_inds[dip_inds.len() - 1])
     {
         let last_peak = peak_inds[peak_inds.len() - 1];
         let threshold = if dip_inds.is_empty() {
@@ -145,15 +144,13 @@ pub fn limited_ltr_slope(
         } else {
             limited.push(y[i]);
 
-            if prev_clipped {
-                if let Some(region_start) = open_region.take() {
-                    // Peak check: [region_start, i) exclusive [Gotcha F]
-                    let has_peak = peak_inds.iter().any(|&p| p >= region_start && p < i);
-                    if !has_peak {
-                        for j in region_start..i {
-                            limited[j] = y[j];
-                            clipped[j] = false;
-                        }
+            if prev_clipped && let Some(region_start) = open_region.take() {
+                // Peak check: [region_start, i) exclusive [Gotcha F]
+                let has_peak = peak_inds.iter().any(|&p| p >= region_start && p < i);
+                if !has_peak {
+                    for j in region_start..i {
+                        limited[j] = y[j];
+                        clipped[j] = false;
                     }
                 }
             }
@@ -179,8 +176,14 @@ pub fn limited_rtl_slope(
     let flipped_mask: Vec<bool> = limit_free_mask.iter().rev().copied().collect();
     let y_flipped: Vec<f64> = y.iter().rev().copied().collect();
 
-    let mut result =
-        limited_ltr_slope(x, &y_flipped, max_slope, rtl_start, &flipped_peaks, &flipped_mask);
+    let mut result = limited_ltr_slope(
+        x,
+        &y_flipped,
+        max_slope,
+        rtl_start,
+        &flipped_peaks,
+        &flipped_mask,
+    );
     result.reverse();
     result
 }
@@ -212,8 +215,7 @@ pub fn equalize(error: &[FreqPoint]) -> Vec<FreqPoint> {
     let rtl_start = find_rtl_start(&y, &peak_inds, &dip_inds);
 
     let limited_ltr = limited_ltr_slope(&x, &y, MAX_SLOPE, 0, &peak_inds, &limit_free_mask);
-    let limited_rtl =
-        limited_rtl_slope(&x, &y, MAX_SLOPE, rtl_start, &peak_inds, &limit_free_mask);
+    let limited_rtl = limited_rtl_slope(&x, &y, MAX_SLOPE, rtl_start, &peak_inds, &limit_free_mask);
 
     // Element-wise min
     let mut combined: Vec<f64> = limited_ltr
@@ -222,13 +224,9 @@ pub fn equalize(error: &[FreqPoint]) -> Vec<FreqPoint> {
         .map(|(&l, &r)| l.min(r))
         .collect();
 
-    // Apply treble_gain_k BEFORE clipping [Gotcha E]
-    // gain_k = 1 + (treble_gain_k - 1) * sigmoid; treble_gain_k=1.0 → identity for our goldens
-    for (v, &freq) in combined.iter_mut().zip(x.iter()) {
-        let k = log_f_sigmoid(freq, TREBLE_F_LOWER, TREBLE_F_UPPER);
-        let gain_k = 1.0 + (1.0_f64 - 1.0) * k; // treble_gain_k=1.0
-        *v *= gain_k;
-    }
+    // treble_gain_k=1.0 for all current goldens → identity multiplier, no loop needed.
+    // When this param is exposed: multiply combined[i] by log_f_sigmoid(x[i], TREBLE_F_LOWER,
+    // TREBLE_F_UPPER) scaled by (treble_gain_k - 1.0), BEFORE the clip below [Gotcha E].
 
     // Clip positive gain to MAX_GAIN (no negative cap)
     for v in combined.iter_mut() {
@@ -308,7 +306,10 @@ mod tests {
         let y = [0.0, 100.0, 99.5, 0.0];
         let result = limited_ltr_slope(&x, &y, 18.0, 0, &[1], &[false; 4]);
         assert!(result[1] < 1.0, "index 1 should be slope-limited");
-        assert!(result[2] < 2.0, "index 2 should also be slope-limited (cascade)");
+        assert!(
+            result[2] < 2.0,
+            "index 2 should also be slope-limited (cascade)"
+        );
     }
 
     #[test]
@@ -332,7 +333,10 @@ mod tests {
     fn test_equalize_flat_error() {
         // Must use enough points so savgol window fits (695 for 1.01 grid)
         let error: Vec<FreqPoint> = (0..695)
-            .map(|i| FreqPoint { freq: 20.0 * 1.01f64.powi(i), db: 0.0 })
+            .map(|i| FreqPoint {
+                freq: 20.0 * 1.01f64.powi(i),
+                db: 0.0,
+            })
             .collect();
         let eq = equalize(&error);
         for p in &eq {
