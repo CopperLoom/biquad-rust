@@ -16,7 +16,8 @@ pub fn build_grid(f_min: f64, f_max: f64, step: f64) -> Vec<f64> {
 }
 
 /// Resample a frequency response to a log-spaced grid using log-linear interpolation.
-/// Clamps to boundary values outside the measured range (no extrapolation).
+/// Extrapolates linearly (in log-frequency space) outside the measured range, matching
+/// AutoEQ's `InterpolatedUnivariateSpline(log_f, data, k=1)` default behavior.
 pub fn interpolate(fr: &[FreqPoint], options: &InterpolateOptions) -> Vec<FreqPoint> {
     let step = options.step.unwrap_or(DEFAULT_STEP);
     let f_min = options.f_min.unwrap_or(DEFAULT_F_MIN);
@@ -31,26 +32,27 @@ pub fn interpolate(fr: &[FreqPoint], options: &InterpolateOptions) -> Vec<FreqPo
         .map(|freq| {
             let log_f = freq.ln();
 
-            if log_f <= log_freqs[0] {
-                return FreqPoint { freq, db: dbs[0] };
-            }
-            if log_f >= log_freqs[n - 1] {
-                return FreqPoint { freq, db: dbs[n - 1] };
-            }
-
-            // Binary search for surrounding pair
-            let mut lo = 0;
-            let mut hi = n - 1;
-            while hi - lo > 1 {
-                let mid = (lo + hi) / 2;
-                if log_freqs[mid] <= log_f {
-                    lo = mid;
-                } else {
-                    hi = mid;
+            // Extrapolate using slope of first/last segment when outside the input range.
+            let (lo, hi) = if log_f <= log_freqs[0] {
+                (0usize, 1usize.min(n - 1))
+            } else if log_f >= log_freqs[n - 1] {
+                (n - 2, n - 1)
+            } else {
+                let mut lo = 0;
+                let mut hi = n - 1;
+                while hi - lo > 1 {
+                    let mid = (lo + hi) / 2;
+                    if log_freqs[mid] <= log_f {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
                 }
-            }
+                (lo, hi)
+            };
 
-            let t = (log_f - log_freqs[lo]) / (log_freqs[hi] - log_freqs[lo]);
+            let span = log_freqs[hi] - log_freqs[lo];
+            let t = if span == 0.0 { 0.0 } else { (log_f - log_freqs[lo]) / span };
             let db = dbs[lo] + t * (dbs[hi] - dbs[lo]);
             FreqPoint { freq, db }
         })
@@ -96,25 +98,29 @@ mod tests {
     }
 
     #[test]
-    fn interpolate_clamps_below() {
+    fn interpolate_extrapolates_below() {
+        // Slope (5 → 0 dB) over (log 100 → log 1000) = -5/log(10) per nat.
+        // At 20 Hz: db = 5 + (ln 20 - ln 100) / (ln 1000 - ln 100) * (0 - 5)
         let fr = vec![
             FreqPoint { freq: 100.0, db: 5.0 },
             FreqPoint { freq: 1000.0, db: 0.0 },
         ];
         let opts = InterpolateOptions { step: Some(1.01), f_min: Some(20.0), f_max: Some(20.0) };
         let result = interpolate(&fr, &opts);
-        assert_abs_diff_eq!(result[0].db, 5.0, epsilon = 1e-10);
+        let expected = 5.0 + (20f64.ln() - 100f64.ln()) / (1000f64.ln() - 100f64.ln()) * (0.0 - 5.0);
+        assert_abs_diff_eq!(result[0].db, expected, epsilon = 1e-10);
     }
 
     #[test]
-    fn interpolate_clamps_above() {
+    fn interpolate_extrapolates_above() {
         let fr = vec![
             FreqPoint { freq: 100.0, db: 0.0 },
             FreqPoint { freq: 1000.0, db: 5.0 },
         ];
         let opts = InterpolateOptions { step: Some(1.01), f_min: Some(5000.0), f_max: Some(5000.0) };
         let result = interpolate(&fr, &opts);
-        assert_abs_diff_eq!(result[0].db, 5.0, epsilon = 1e-10);
+        let expected = 0.0 + (5000f64.ln() - 100f64.ln()) / (1000f64.ln() - 100f64.ln()) * (5.0 - 0.0);
+        assert_abs_diff_eq!(result[0].db, expected, epsilon = 1e-10);
     }
 
     #[test]

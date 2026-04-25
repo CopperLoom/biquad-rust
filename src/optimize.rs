@@ -506,8 +506,9 @@ fn joint_optimize(
     max_f_ix: usize,
     ten_k_ix: usize,
     stop_threshold: Option<f64>,
+    x0_override: Option<Vec<f64>>,
 ) -> Result<Vec<Filter>, BiquadError> {
-    let x0 = encode_params(initial_filters, specs);
+    let x0 = x0_override.unwrap_or_else(|| encode_params(initial_filters, specs));
     if x0.is_empty() {
         return Ok(initial_filters.to_vec()); // no free variables
     }
@@ -682,13 +683,66 @@ pub fn optimize(
 
     // 9. Optimize
     let filters = joint_optimize(
-        &initial, &specs, &opt_freqs, &correction, fs, mf, xf, tk, stop_threshold,
+        &initial, &specs, &opt_freqs, &correction, fs, mf, xf, tk, stop_threshold, None,
     )?;
 
     // 10. Pregain
     let pregain = compute_pregain(&filters, &opt_freqs, fs);
 
     Ok(OptimizeResult { pregain, filters })
+}
+
+/// Like `optimize` but uses a caller-supplied x0 instead of running init.
+/// x0 must be encoded identically to `encode_params`: log10(fc), q, gain per free param.
+/// Exposed for diagnostic tests that want to feed AutoEQ's x0 directly.
+pub fn optimize_from_x0(
+    measured: &[FreqPoint],
+    target: &[FreqPoint],
+    constraints: &Constraints,
+    x0: Vec<f64>,
+) -> Result<OptimizeResult, BiquadError> {
+    let fs = constraints.fs.unwrap_or(44100.0);
+    let stop_threshold = match constraints.min_std.as_ref().unwrap_or(&MinStd::Default) {
+        MinStd::Default => Some(0.002),
+        MinStd::Custom(v) => Some(*v),
+        MinStd::Disabled => None,
+    };
+    let measured_i = interpolate(measured, &InterpolateOptions { step: Some(1.01), f_min: Some(20.0), f_max: Some(20000.0) });
+    let measured_c = center(&measured_i);
+    let error = compensate(&measured_c, target);
+    let eq_curve = equalize(&error);
+    let eq_on_opt = interpolate(&eq_curve, &InterpolateOptions { step: Some(1.02), f_min: Some(20.0), f_max: Some(20000.0) });
+    let correction: Vec<f64> = eq_on_opt.iter().map(|p| p.db).collect();
+    let opt_freqs = build_grid(20.0, 20000.0, 1.02);
+    let specs = resolve_specs(&constraints.filter_specs)?;
+    let mf = loss_min_f_ix(&opt_freqs);
+    let xf = loss_max_f_ix(&opt_freqs);
+    let tk = ten_k_ix(&opt_freqs);
+    // Use zero-gain placeholders so decode_params has a filter list to splice locked params into.
+    let initial = init_filters(&specs, &opt_freqs, &correction, fs);
+    let filters = joint_optimize(&initial, &specs, &opt_freqs, &correction, fs, mf, xf, tk, stop_threshold, Some(x0))?;
+    let pregain = compute_pregain(&filters, &opt_freqs, fs);
+    Ok(OptimizeResult { pregain, filters })
+}
+
+/// Returns the encoded x0 that `optimize` would feed to SLSQP (log10(fc), q, gain per free param).
+pub fn compute_x0(
+    measured: &[FreqPoint],
+    target: &[FreqPoint],
+    constraints: &Constraints,
+) -> Result<(Vec<f64>, Vec<Filter>), BiquadError> {
+    let fs = constraints.fs.unwrap_or(44100.0);
+    let measured_i = interpolate(measured, &InterpolateOptions { step: Some(1.01), f_min: Some(20.0), f_max: Some(20000.0) });
+    let measured_c = center(&measured_i);
+    let error = compensate(&measured_c, target);
+    let eq_curve = equalize(&error);
+    let eq_on_opt = interpolate(&eq_curve, &InterpolateOptions { step: Some(1.02), f_min: Some(20.0), f_max: Some(20000.0) });
+    let correction: Vec<f64> = eq_on_opt.iter().map(|p| p.db).collect();
+    let opt_freqs = build_grid(20.0, 20000.0, 1.02);
+    let specs = resolve_specs(&constraints.filter_specs)?;
+    let initial = init_filters(&specs, &opt_freqs, &correction, fs);
+    let x0 = encode_params(&initial, &specs);
+    Ok((x0, initial))
 }
 
 // ────────────────────────────────────────────────────────────────────────────

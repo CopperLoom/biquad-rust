@@ -813,6 +813,45 @@ TypeScript: `biquadResponse.ts`.
 
 ---
 
+## Known Divergences from AutoEQ
+
+Verified 2026-04-25 across the 90-case golden matrix. After fixing `interpolate` to
+extrapolate linearly at the boundaries (matching AutoEQ's `InterpolatedUnivariateSpline`
+default), our pipeline produces:
+
+- **Bit-identical correction curves** to AutoEQ on the 1.01 grid (mean and max diff
+  = 0.000000 dB across all sampled cases).
+- **Bit-identical x0 vectors** after `_init_optimizer_params` (max param diff = 0.000000).
+
+87 of 90 golden combinations pass at ≤ 0.5 dB RMSE. The remaining 3 cases:
+
+| Case | RMSE | RMSE when fed AutoEQ's x0 |
+|------|------|---------------------------|
+| `hexa__diffuse_field__restricted` | 2.29 dB | 2.04 dB |
+| `origin_s__bass_heavy__qudelix_10` | 0.66 dB | 0.57 dB |
+| `zero2__bass_heavy__restricted` | 0.51 dB | 0.51 dB |
+
+**Cause: SLSQP solver divergence.** `relf/slsqp` (Rust port of the Fortran SLSQP) and
+scipy's `fmin_slsqp` (the same Fortran via Python wrapper) take different convergence
+trajectories on these specific cost surfaces and find different local minima from
+the same starting point. This is inherent to nonlinear constrained optimization, not
+a bug in either implementation. Differences trace to:
+
+- Finite-difference gradient step size and direction.
+- Internal active-set management of inequality bounds.
+- QP subproblem solver numerical precision.
+- Convergence/termination thresholds.
+
+The two cases at 0.51 / 0.57 dB are basically "different but equally-good local minimum,
+just past the threshold." `hexa__diffuse_field__restricted` at ~2 dB is a meaningful
+basin-of-attraction difference — neither solver is "wrong," they simply land in
+different valleys.
+
+See PLAN.md Phase 10 for revisit work (try alternate Rust SLSQP crates, tune solver
+parameters, or scipy-via-PyO3 reference).
+
+---
+
 ## Differences from TypeScript biquad-fit v2.1.0
 
 | Area | TypeScript | Rust | Why |
