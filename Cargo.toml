@@ -6,7 +6,7 @@ description = "Rust implementation of parametric EQ optimization for audio devic
 license = "MIT"
 repository = "https://github.com/CopperLoom/biquad-rust"
 authors = ["CopperLoom <coppeloom@mailbox.org>"]
-keywords = ["eq", "peq", "audio", "iem", "headphone", "equalizer", "autoeq"]
+keywords = ["audio", "peq", "iem", "equalizer", "biquad"]
 categories = ["multimedia::audio"]
 
 [dependencies]
