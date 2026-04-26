@@ -5,7 +5,7 @@ response and a target curve, computes optimal biquad filter parameters (frequenc
 that bring the IEM closest to the target.
 
 Faithful port of [jaakkopasanen/AutoEQ](https://github.com/jaakkopasanen/AutoEQ)'s pipeline
-and SLSQP optimizer. Results match AutoEQ within **≤ 0.5 dB RMSE** across a 90-case
+and SLSQP optimizer. **86 of 90** cases match AutoEQ within ≤ 0.5 dB RMSE across a
 golden test matrix (5 IEMs × 6 targets × 3 constraint sets).
 
 ---
@@ -156,7 +156,7 @@ Pipeline matches AutoEQ exactly:
 9. **Pregain**: `max(0, max_filter_boost + 0.2 dB headroom)`
 
 **Solver:** `relf/slsqp` — a native Rust port of the same Fortran SLSQP that scipy wraps.
-87 of 90 golden cases pass at ≤ 0.5 dB RMSE; the 3 remaining cases are different local
+86 of 90 golden cases pass at ≤ 0.5 dB RMSE; the 4 remaining cases are different local
 minima (solver trajectory divergence, not algorithmic error). See `docs/ARCHITECTURE.md`
 "Known Divergences" for details.
 
