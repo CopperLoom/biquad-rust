@@ -127,6 +127,7 @@ fn golden_all_90() {
         "hexa__diffuse_field__restricted.json",
         "origin_s__bass_heavy__qudelix_10.json",
         "zero2__bass_heavy__restricted.json",
+        "origin_s__v_shaped__qudelix_10.json",
     ];
 
     let freqs = optimizer_grid();
