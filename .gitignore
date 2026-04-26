@@ -1,4 +1,5 @@
 /target
 /docs
+/.claude
 Cargo.lock
 CLAUDE.md

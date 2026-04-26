@@ -2,6 +2,12 @@
 name = "biquad-rust"
 version = "0.1.0"
 edition = "2024"
+description = "Rust implementation of parametric EQ optimization for audio devices"
+license = "MIT"
+repository = "https://github.com/CopperLoom/biquad-rust"
+authors = ["CopperLoom <coppeloom@mailbox.org>"]
+keywords = ["eq", "peq", "audio", "iem", "headphone", "equalizer", "autoeq"]
+categories = ["multimedia::audio"]
 
 [dependencies]
 slsqp = "1"
